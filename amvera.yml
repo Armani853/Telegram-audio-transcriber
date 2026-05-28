@@ -6,4 +6,4 @@ meta:
 build:
   requirements: requirements.txt
 run:
-  scriptName: main.py
+  scriptName: test_whisper.py
