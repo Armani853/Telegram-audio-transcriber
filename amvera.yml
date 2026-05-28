@@ -1,0 +1,9 @@
+meta:
+  environment: python
+  toolchain:
+    name: pip
+    version: 3.10
+build:
+  requirements: requirements.txt
+run:
+  scriptName: main.py

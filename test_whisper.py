@@ -3,8 +3,10 @@ import argparse
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+import sys
 import tempfile
 import uuid
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Optional
 
@@ -75,8 +77,9 @@ def get_groq_client() -> AsyncGroq:
         "trust_env": False,
         "timeout": httpx.Timeout(180.0, connect=30.0),
     }
-    if GROQ_PROXY_URL:
-        http_client_kwargs["proxy"] = GROQ_PROXY_URL
+    groq_proxy_url = get_effective_proxy_url(GROQ_PROXY_URL)
+    if groq_proxy_url:
+        http_client_kwargs["proxy"] = groq_proxy_url
 
     return AsyncGroq(
         api_key=GROQ_API_KEY,
@@ -89,13 +92,33 @@ def create_bot() -> Bot:
     Create Telegram bot, optionally using TELEGRAM_PROXY_URL.
     """
     validate_config()
-    if TELEGRAM_PROXY_URL:
+    telegram_proxy_url = get_effective_proxy_url(TELEGRAM_PROXY_URL)
+    if telegram_proxy_url:
         return Bot(
             token=TELEGRAM_BOT_TOKEN,
-            session=AiohttpSession(proxy=TELEGRAM_PROXY_URL),
+            session=AiohttpSession(proxy=telegram_proxy_url),
         )
 
     return Bot(token=TELEGRAM_BOT_TOKEN)
+
+
+def get_effective_proxy_url(proxy_url: str) -> str:
+    """
+    Ignore local Windows proxy values when the app runs on Linux hosting.
+    """
+    proxy_url = proxy_url.strip()
+    if not proxy_url:
+        return ""
+
+    parsed = urlparse(proxy_url)
+    host = (parsed.hostname or "").lower()
+    is_local_proxy = host in {"127.0.0.1", "localhost", "::1"}
+
+    if is_local_proxy and not sys.platform.startswith("win"):
+        logging.warning("Ignoring local proxy %s on non-Windows host.", proxy_url)
+        return ""
+
+    return proxy_url
 
 
 def configure_logging() -> None:
