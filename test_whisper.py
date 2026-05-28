@@ -2,6 +2,7 @@ import asyncio
 import argparse
 import logging
 from logging.handlers import RotatingFileHandler
+import mimetypes
 import os
 import sys
 import tempfile
@@ -47,6 +48,7 @@ LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 LOG_FILE = Path(__file__).with_name("bot_error.log")
 
 router = Router()
+groq_transcription_semaphore = asyncio.Semaphore(1)
 
 
 # ============================================================
@@ -75,7 +77,7 @@ def get_groq_client() -> AsyncGroq:
     validate_config()
     http_client_kwargs = {
         "trust_env": False,
-        "timeout": httpx.Timeout(180.0, connect=30.0),
+        "timeout": httpx.Timeout(600.0, connect=30.0),
     }
     groq_proxy_url = get_effective_proxy_url(GROQ_PROXY_URL)
     if groq_proxy_url:
@@ -272,10 +274,18 @@ async def transcribe_with_groq(audio_path: Path) -> str:
     """
     groq_client = get_groq_client()
 
+    mime_type = mimetypes.guess_type(audio_path.name)[0] or "audio/ogg"
+    logging.info(
+        "Sending audio to Groq: name=%s size=%s mime_type=%s",
+        audio_path.name,
+        audio_path.stat().st_size,
+        mime_type,
+    )
+
     try:
         with audio_path.open("rb") as audio_file:
             transcription = await groq_client.audio.transcriptions.create(
-                file=(audio_path.name, audio_file.read()),
+                file=(audio_path.name, audio_file, mime_type),
                 model=GROQ_WHISPER_MODEL,
                 language=TRANSCRIPTION_LANGUAGE,
                 temperature=0,
@@ -471,9 +481,19 @@ async def audio_handler(message: Message, bot: Bot) -> None:
             )
             return
 
-        await safe_edit_message(status_message, "Аудио получено. Распознаю речь через Groq Whisper...")
+        if groq_transcription_semaphore.locked():
+            await safe_edit_message(
+                status_message,
+                "Аудио получено. Жду завершения предыдущего распознавания...",
+            )
 
-        text = await transcribe_with_groq(local_path)
+        async with groq_transcription_semaphore:
+            await safe_edit_message(
+                status_message,
+                "Аудио получено. Распознаю речь через Groq Whisper...",
+            )
+
+            text = await transcribe_with_groq(local_path)
         logging.info("Groq transcription finished, text_length=%s", len(text))
 
         await send_long_message(message, text)
