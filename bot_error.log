@@ -1,275 +1,33 @@
-2026-05-23 02:08:18,881 | INFO | root | Checking Telegram connection...
-2026-05-23 02:08:19,109 | INFO | root | Bot connected as @ru_voice_whisper_bot
-2026-05-23 02:08:19,163 | INFO | root | Polling started. Press Ctrl+C to stop.
-2026-05-23 02:08:19,165 | INFO | aiogram.dispatcher | Start polling
-2026-05-23 02:08:19,222 | INFO | aiogram.dispatcher | Run polling for bot @ru_voice_whisper_bot id=8587251551 - 'Whisper Voice Bot'
-2026-05-23 02:09:04,052 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:09:04,053 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:09:05,073 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:09:05,073 | WARNING | aiogram.dispatcher | Sleep for 1.437443 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:09:16,728 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 02:18:21,114 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:18:21,115 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:18:22,127 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:18:22,127 | WARNING | aiogram.dispatcher | Sleep for 1.324257 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:18:25,625 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:18:25,625 | WARNING | aiogram.dispatcher | Sleep for 1.799744 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 02:18:31,764 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:18:31,764 | WARNING | aiogram.dispatcher | Sleep for 2.212693 seconds and try again... (tryings = 3, bot id = 8587251551)
-2026-05-23 02:18:34,999 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:18:35,000 | WARNING | aiogram.dispatcher | Sleep for 2.768078 seconds and try again... (tryings = 4, bot id = 8587251551)
-2026-05-23 02:18:48,032 | INFO | aiogram.dispatcher | Connection established (tryings = 5, bot id = 8587251551)
-2026-05-23 02:20:54,455 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:20:54,456 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:20:55,471 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:20:55,472 | WARNING | aiogram.dispatcher | Sleep for 1.518314 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:21:07,238 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 02:21:35,013 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:21:35,013 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:21:36,029 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:21:36,029 | WARNING | aiogram.dispatcher | Sleep for 1.205424 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:21:39,920 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:21:39,921 | WARNING | aiogram.dispatcher | Sleep for 1.667665 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 02:21:51,822 | INFO | aiogram.dispatcher | Connection established (tryings = 3, bot id = 8587251551)
-2026-05-23 02:21:56,653 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:21:56,653 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:22:07,909 | INFO | aiogram.dispatcher | Connection established (tryings = 1, bot id = 8587251551)
-2026-05-23 02:25:37,838 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:25:37,839 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:25:38,847 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:25:38,848 | WARNING | aiogram.dispatcher | Sleep for 1.552689 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:25:50,659 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 02:26:31,725 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:26:31,725 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:26:32,733 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:26:32,734 | WARNING | aiogram.dispatcher | Sleep for 1.384779 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:26:44,407 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 02:29:08,186 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - Request timeout error
-2026-05-23 02:29:08,187 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:29:19,414 | INFO | aiogram.dispatcher | Connection established (tryings = 1, bot id = 8587251551)
-2026-05-23 02:30:35,725 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:30:35,725 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:30:36,731 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:30:36,731 | WARNING | aiogram.dispatcher | Sleep for 1.149993 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:30:48,107 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 02:40:56,581 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:40:56,582 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:40:57,595 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:40:57,596 | WARNING | aiogram.dispatcher | Sleep for 1.256453 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:40:59,834 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:40:59,835 | WARNING | aiogram.dispatcher | Sleep for 1.587022 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 02:41:11,647 | INFO | aiogram.dispatcher | Connection established (tryings = 3, bot id = 8587251551)
-2026-05-23 02:42:51,940 | INFO | root | Checking Telegram connection...
-2026-05-23 02:42:52,158 | INFO | root | Bot connected as @ru_voice_whisper_bot
-2026-05-23 02:42:52,211 | INFO | root | Polling started. Press Ctrl+C to stop.
-2026-05-23 02:42:52,212 | INFO | aiogram.dispatcher | Start polling
-2026-05-23 02:42:52,265 | INFO | aiogram.dispatcher | Run polling for bot @ru_voice_whisper_bot id=8587251551 - 'Whisper Voice Bot'
-2026-05-23 02:43:51,178 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:43:51,178 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:43:52,197 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:43:52,197 | WARNING | aiogram.dispatcher | Sleep for 1.342065 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:44:03,750 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 02:46:04,274 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:46:04,274 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:46:05,291 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:46:05,291 | WARNING | aiogram.dispatcher | Sleep for 1.169750 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:46:06,501 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:46:06,502 | WARNING | aiogram.dispatcher | Sleep for 1.696135 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 02:46:18,444 | INFO | aiogram.dispatcher | Connection established (tryings = 3, bot id = 8587251551)
-2026-05-23 02:46:53,540 | INFO | root | Checking Telegram connection...
-2026-05-23 02:46:53,752 | INFO | root | Bot connected as @ru_voice_whisper_bot
-2026-05-23 02:46:53,805 | INFO | root | Polling started. Press Ctrl+C to stop.
-2026-05-23 02:46:53,805 | INFO | aiogram.dispatcher | Start polling
-2026-05-23 02:46:53,870 | INFO | aiogram.dispatcher | Run polling for bot @ru_voice_whisper_bot id=8587251551 - 'Whisper Voice Bot'
-2026-05-23 02:56:05,783 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 02:56:05,783 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 02:56:06,795 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 02:56:06,797 | WARNING | aiogram.dispatcher | Sleep for 1.312382 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 02:56:21,351 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 03:02:44,529 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:02:44,531 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:02:45,537 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 03:02:45,537 | WARNING | aiogram.dispatcher | Sleep for 1.298299 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:02:48,564 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:02:48,564 | WARNING | aiogram.dispatcher | Sleep for 1.496150 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 03:02:51,910 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:02:51,910 | WARNING | aiogram.dispatcher | Sleep for 1.934758 seconds and try again... (tryings = 3, bot id = 8587251551)
-2026-05-23 03:02:57,283 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:02:57,285 | WARNING | aiogram.dispatcher | Sleep for 2.421322 seconds and try again... (tryings = 4, bot id = 8587251551)
-2026-05-23 03:03:01,988 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:03:02,002 | WARNING | aiogram.dispatcher | Sleep for 3.265614 seconds and try again... (tryings = 5, bot id = 8587251551)
-2026-05-23 03:03:15,496 | INFO | aiogram.dispatcher | Connection established (tryings = 6, bot id = 8587251551)
-2026-05-23 03:04:53,421 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:04:53,422 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:04:56,311 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:04:56,311 | WARNING | aiogram.dispatcher | Sleep for 1.174199 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:05:06,195 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:05:06,195 | WARNING | aiogram.dispatcher | Sleep for 1.607485 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 03:05:14,156 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:05:14,157 | WARNING | aiogram.dispatcher | Sleep for 2.020224 seconds and try again... (tryings = 3, bot id = 8587251551)
-2026-05-23 03:05:26,398 | INFO | aiogram.dispatcher | Connection established (tryings = 4, bot id = 8587251551)
-2026-05-23 03:08:13,274 | INFO | root | Received audio-like message chat_id=1031126452 voice=True audio=False document=False
-2026-05-23 03:08:13,275 | INFO | root | Processing file chat_id=1031126452 original_name=voice_AgADW6YAAhMfgEg.ogg size=952654
-2026-05-23 03:08:14,269 | INFO | root | Downloaded Telegram file to C:\Users\E8F7~1\AppData\Local\Temp\tg_voice_7e4505f321284616a80425ac5add7999.ogg
-2026-05-23 03:08:16,728 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/audio/transcriptions "HTTP/1.1 200 OK"
-2026-05-23 03:08:16,732 | INFO | root | Groq transcription finished, text_length=680
-2026-05-23 03:08:16,878 | INFO | root | Sent transcription to chat_id=1031126452
-2026-05-23 03:08:16,881 | INFO | aiogram.event | Update id=104927024 is handled. Duration 3608 ms by bot id=8587251551
-2026-05-23 03:08:39,296 | INFO | root | Received audio-like message chat_id=1031126452 voice=True audio=False document=False
-2026-05-23 03:08:39,296 | INFO | root | Processing file chat_id=1031126452 original_name=voice_AgADUKYAAhMfgEg.ogg size=5443454
-2026-05-23 03:08:39,299 | INFO | root | Received audio-like message chat_id=1031126452 voice=True audio=False document=False
-2026-05-23 03:08:39,299 | INFO | root | Processing file chat_id=1031126452 original_name=voice_AgADtKMAAg7MiEg.ogg size=5792006
-2026-05-23 03:08:40,945 | INFO | root | Downloaded Telegram file to C:\Users\E8F7~1\AppData\Local\Temp\tg_voice_5dbd5b76e812497ab874092791713e49.ogg
-2026-05-23 03:08:41,772 | INFO | root | Downloaded Telegram file to C:\Users\E8F7~1\AppData\Local\Temp\tg_voice_ae32523c305a458b99ffc5243bf0c8eb.ogg
-2026-05-23 03:08:44,173 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/audio/transcriptions "HTTP/1.1 200 OK"
-2026-05-23 03:08:44,175 | INFO | root | Groq transcription finished, text_length=2641
-2026-05-23 03:08:44,406 | INFO | root | Sent transcription to chat_id=1031126452
-2026-05-23 03:08:44,408 | INFO | aiogram.event | Update id=104927025 is handled. Duration 5109 ms by bot id=8587251551
-2026-05-23 03:08:44,703 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/audio/transcriptions "HTTP/1.1 200 OK"
-2026-05-23 03:08:44,705 | INFO | root | Groq transcription finished, text_length=3530
-2026-05-23 03:08:45,066 | INFO | root | Sent transcription to chat_id=1031126452
-2026-05-23 03:08:45,070 | INFO | aiogram.event | Update id=104927026 is handled. Duration 5781 ms by bot id=8587251551
-2026-05-23 03:10:47,585 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:10:47,586 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:10:48,596 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 03:10:48,596 | WARNING | aiogram.dispatcher | Sleep for 1.310060 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:11:00,117 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 03:16:13,848 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:16:13,856 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:16:14,877 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
-2026-05-23 03:16:14,877 | WARNING | aiogram.dispatcher | Sleep for 1.327918 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:16:26,434 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 03:17:46,172 | INFO | root | Checking Telegram connection...
-2026-05-23 03:17:46,403 | INFO | root | Bot connected as @ru_voice_whisper_bot
-2026-05-23 03:17:46,460 | INFO | root | Polling started. Press Ctrl+C to stop.
-2026-05-23 03:17:46,460 | INFO | aiogram.dispatcher | Start polling
-2026-05-23 03:17:46,522 | INFO | aiogram.dispatcher | Run polling for bot @ru_voice_whisper_bot id=8587251551 - 'Whisper Voice Bot'
-2026-05-23 03:17:46,582 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:17:46,582 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:17:50,643 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:17:50,643 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:17:51,714 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:17:51,714 | WARNING | aiogram.dispatcher | Sleep for 1.220485 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:17:55,991 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:17:55,991 | WARNING | aiogram.dispatcher | Sleep for 1.351664 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:17:57,406 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:17:57,406 | WARNING | aiogram.dispatcher | Sleep for 1.607042 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 03:18:02,078 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:02,078 | WARNING | aiogram.dispatcher | Sleep for 1.627710 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 03:18:03,768 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:03,768 | WARNING | aiogram.dispatcher | Sleep for 2.034057 seconds and try again... (tryings = 3, bot id = 8587251551)
-2026-05-23 03:18:08,859 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:08,859 | WARNING | aiogram.dispatcher | Sleep for 1.992095 seconds and try again... (tryings = 3, bot id = 8587251551)
-2026-05-23 03:18:10,921 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:10,921 | WARNING | aiogram.dispatcher | Sleep for 2.665279 seconds and try again... (tryings = 4, bot id = 8587251551)
-2026-05-23 03:18:16,646 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:16,646 | WARNING | aiogram.dispatcher | Sleep for 2.640861 seconds and try again... (tryings = 4, bot id = 8587251551)
-2026-05-23 03:18:19,349 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:19,349 | WARNING | aiogram.dispatcher | Sleep for 3.502105 seconds and try again... (tryings = 5, bot id = 8587251551)
-2026-05-23 03:18:22,907 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:22,907 | WARNING | aiogram.dispatcher | Sleep for 3.648311 seconds and try again... (tryings = 5, bot id = 8587251551)
-2026-05-23 03:18:26,624 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:26,624 | WARNING | aiogram.dispatcher | Sleep for 4.527043 seconds and try again... (tryings = 6, bot id = 8587251551)
-2026-05-23 03:18:31,217 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:31,217 | WARNING | aiogram.dispatcher | Sleep for 4.779680 seconds and try again... (tryings = 6, bot id = 8587251551)
-2026-05-23 03:18:36,064 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:36,064 | WARNING | aiogram.dispatcher | Sleep for 5.229867 seconds and try again... (tryings = 7, bot id = 8587251551)
-2026-05-23 03:18:41,357 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:41,357 | WARNING | aiogram.dispatcher | Sleep for 5.042606 seconds and try again... (tryings = 7, bot id = 8587251551)
-2026-05-23 03:18:41,915 | INFO | aiogram.dispatcher | Connection established (tryings = 8, bot id = 8587251551)
-2026-05-23 03:18:41,917 | INFO | root | Received audio-like message chat_id=1031126452 voice=True audio=False document=False
-2026-05-23 03:18:41,917 | INFO | root | Processing file chat_id=1031126452 original_name=voice_AgADNJ8AAj-xSEg.ogg size=4672190
-2026-05-23 03:18:43,390 | INFO | root | Downloaded Telegram file to C:\Users\E8F7~1\AppData\Local\Temp\tg_voice_a9baef3dc0f24b6bacea95300cfec3e0.ogg
-2026-05-23 03:18:46,474 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:46,474 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:18:46,732 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/audio/transcriptions "HTTP/1.1 200 OK"
-2026-05-23 03:18:46,735 | INFO | root | Groq transcription finished, text_length=2165
-2026-05-23 03:18:46,876 | INFO | root | Sent transcription to chat_id=1031126452
-2026-05-23 03:18:46,880 | INFO | aiogram.event | Update id=104927027 is handled. Duration 4952 ms by bot id=8587251551
-2026-05-23 03:18:50,533 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:50,533 | WARNING | aiogram.dispatcher | Sleep for 4.892437 seconds and try again... (tryings = 8, bot id = 8587251551)
-2026-05-23 03:18:55,491 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:55,491 | WARNING | aiogram.dispatcher | Sleep for 1.170877 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:18:59,732 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:18:59,732 | WARNING | aiogram.dispatcher | Sleep for 5.118540 seconds and try again... (tryings = 9, bot id = 8587251551)
-2026-05-23 03:19:04,921 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:04,921 | WARNING | aiogram.dispatcher | Sleep for 1.507082 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 03:19:09,490 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:09,490 | WARNING | aiogram.dispatcher | Sleep for 4.895001 seconds and try again... (tryings = 10, bot id = 8587251551)
-2026-05-23 03:19:14,593 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:14,593 | WARNING | aiogram.dispatcher | Sleep for 2.045088 seconds and try again... (tryings = 3, bot id = 8587251551)
-2026-05-23 03:19:19,701 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:19,701 | WARNING | aiogram.dispatcher | Sleep for 4.968873 seconds and try again... (tryings = 11, bot id = 8587251551)
-2026-05-23 03:19:24,733 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:24,734 | WARNING | aiogram.dispatcher | Sleep for 2.736978 seconds and try again... (tryings = 4, bot id = 8587251551)
-2026-05-23 03:19:30,527 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:30,527 | WARNING | aiogram.dispatcher | Sleep for 5.015189 seconds and try again... (tryings = 12, bot id = 8587251551)
-2026-05-23 03:19:35,615 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:35,615 | WARNING | aiogram.dispatcher | Sleep for 3.464983 seconds and try again... (tryings = 5, bot id = 8587251551)
-2026-05-23 03:19:39,137 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:39,137 | WARNING | aiogram.dispatcher | Sleep for 5.015782 seconds and try again... (tryings = 13, bot id = 8587251551)
-2026-05-23 03:19:44,223 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:44,223 | WARNING | aiogram.dispatcher | Sleep for 4.451273 seconds and try again... (tryings = 6, bot id = 8587251551)
-2026-05-23 03:19:48,735 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:48,735 | WARNING | aiogram.dispatcher | Sleep for 5.065107 seconds and try again... (tryings = 14, bot id = 8587251551)
-2026-05-23 03:19:53,866 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:53,867 | WARNING | aiogram.dispatcher | Sleep for 4.822346 seconds and try again... (tryings = 7, bot id = 8587251551)
-2026-05-23 03:19:58,749 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:19:58,750 | WARNING | aiogram.dispatcher | Sleep for 4.819070 seconds and try again... (tryings = 15, bot id = 8587251551)
-2026-05-23 03:20:03,626 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:20:03,626 | WARNING | aiogram.dispatcher | Sleep for 5.091028 seconds and try again... (tryings = 8, bot id = 8587251551)
-2026-05-23 03:20:08,780 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:20:08,780 | WARNING | aiogram.dispatcher | Sleep for 4.991551 seconds and try again... (tryings = 16, bot id = 8587251551)
-2026-05-23 03:20:13,844 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:20:13,844 | WARNING | aiogram.dispatcher | Sleep for 4.937828 seconds and try again... (tryings = 9, bot id = 8587251551)
-2026-05-23 03:20:29,091 | INFO | aiogram.dispatcher | Connection established (tryings = 10, bot id = 8587251551)
-2026-05-23 03:21:24,229 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - Request timeout error
-2026-05-23 03:21:24,229 | WARNING | aiogram.dispatcher | Sleep for 5.186971 seconds and try again... (tryings = 17, bot id = 8587251551)
-2026-05-23 03:21:39,232 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - Request timeout error
-2026-05-23 03:21:39,234 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:21:39,650 | INFO | aiogram.dispatcher | Connection established (tryings = 18, bot id = 8587251551)
-2026-05-23 03:21:41,477 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:21:41,478 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:21:45,543 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:21:45,543 | WARNING | aiogram.dispatcher | Sleep for 1.371774 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:21:46,985 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
-2026-05-23 03:21:46,985 | WARNING | aiogram.dispatcher | Sleep for 1.299022 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:21:47,840 | INFO | aiogram.dispatcher | Polling stopped
-2026-05-23 03:21:48,105 | INFO | aiogram.dispatcher | Polling stopped for bot @ru_voice_whisper_bot id=8587251551 - 'Whisper Voice Bot'
-2026-05-23 03:21:56,986 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 03:22:08,573 | INFO | root | Received audio-like message chat_id=1031126452 voice=True audio=False document=False
-2026-05-23 03:22:08,573 | INFO | root | Processing file chat_id=1031126452 original_name=voice_AgADeZUAArTXYUg.ogg size=1186670
-2026-05-23 03:22:09,583 | INFO | root | Downloaded Telegram file to C:\Users\E8F7~1\AppData\Local\Temp\tg_voice_5b4dd7c3bad54c0baa769f2174acc6bc.ogg
-2026-05-23 03:22:12,288 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/audio/transcriptions "HTTP/1.1 200 OK"
-2026-05-23 03:22:12,290 | INFO | root | Groq transcription finished, text_length=730
-2026-05-23 03:22:12,433 | INFO | root | Sent transcription to chat_id=1031126452
-2026-05-23 03:22:12,435 | INFO | aiogram.event | Update id=104927028 is handled. Duration 3875 ms by bot id=8587251551
-2026-05-23 03:35:53,031 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:35:53,033 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:36:00,681 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:36:00,681 | WARNING | aiogram.dispatcher | Sleep for 1.240240 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:36:04,492 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:36:04,492 | WARNING | aiogram.dispatcher | Sleep for 1.374599 seconds and try again... (tryings = 2, bot id = 8587251551)
-2026-05-23 03:36:13,500 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:36:13,502 | WARNING | aiogram.dispatcher | Sleep for 1.968292 seconds and try again... (tryings = 3, bot id = 8587251551)
-2026-05-23 03:36:16,958 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:36:16,958 | WARNING | aiogram.dispatcher | Sleep for 2.584521 seconds and try again... (tryings = 4, bot id = 8587251551)
-2026-05-23 03:36:25,483 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:36:25,484 | WARNING | aiogram.dispatcher | Sleep for 3.255491 seconds and try again... (tryings = 5, bot id = 8587251551)
-2026-05-23 03:36:29,922 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:36:29,922 | WARNING | aiogram.dispatcher | Sleep for 4.228329 seconds and try again... (tryings = 6, bot id = 8587251551)
-2026-05-23 03:36:39,170 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:36:39,171 | WARNING | aiogram.dispatcher | Sleep for 5.034932 seconds and try again... (tryings = 7, bot id = 8587251551)
-2026-05-23 03:36:54,438 | INFO | aiogram.dispatcher | Connection established (tryings = 8, bot id = 8587251551)
-2026-05-23 03:37:14,852 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:37:14,854 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
-2026-05-23 03:37:25,197 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
-2026-05-23 03:37:25,198 | WARNING | aiogram.dispatcher | Sleep for 1.332414 seconds and try again... (tryings = 1, bot id = 8587251551)
-2026-05-23 03:37:36,764 | INFO | aiogram.dispatcher | Connection established (tryings = 2, bot id = 8587251551)
-2026-05-23 03:43:32,114 | INFO | root | Received audio-like message chat_id=1031126452 voice=True audio=False document=False
-2026-05-23 03:43:32,114 | INFO | root | Processing file chat_id=1031126452 original_name=voice_AgADTYwAAifMWUs.ogg size=13223662
-2026-05-23 03:43:34,379 | INFO | root | Downloaded Telegram file to C:\Users\E8F7~1\AppData\Local\Temp\tg_voice_fb3cba76bc714b51b15c7240a5bd1e42.ogg
-2026-05-23 03:43:43,164 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/audio/transcriptions "HTTP/1.1 200 OK"
-2026-05-23 03:43:43,167 | INFO | root | Groq transcription finished, text_length=9271
-2026-05-23 03:43:43,579 | INFO | root | Sent transcription to chat_id=1031126452
-2026-05-23 03:43:43,582 | INFO | aiogram.event | Update id=104927029 is handled. Duration 11467 ms by bot id=8587251551
+2026-05-28 22:28:14,085 | INFO | root | Checking Telegram connection...
+2026-05-28 22:28:14,387 | INFO | root | Bot connected as @ru_voice_whisper_bot
+2026-05-28 22:28:14,464 | INFO | root | Polling started. Press Ctrl+C to stop.
+2026-05-28 22:28:14,464 | INFO | aiogram.dispatcher | Start polling
+2026-05-28 22:28:14,537 | INFO | aiogram.dispatcher | Run polling for bot @ru_voice_whisper_bot id=8587251551 - 'Whisper Voice Bot'
+2026-05-28 22:28:18,658 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:28:18,659 | WARNING | aiogram.dispatcher | Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8587251551)
+2026-05-28 22:28:24,107 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:28:24,107 | WARNING | aiogram.dispatcher | Sleep for 1.535779 seconds and try again... (tryings = 1, bot id = 8587251551)
+2026-05-28 22:28:30,436 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:28:30,436 | WARNING | aiogram.dispatcher | Sleep for 2.146835 seconds and try again... (tryings = 2, bot id = 8587251551)
+2026-05-28 22:28:37,497 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:28:37,497 | WARNING | aiogram.dispatcher | Sleep for 2.682295 seconds and try again... (tryings = 3, bot id = 8587251551)
+2026-05-28 22:28:45,768 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:28:45,768 | WARNING | aiogram.dispatcher | Sleep for 3.544270 seconds and try again... (tryings = 4, bot id = 8587251551)
+2026-05-28 22:28:55,351 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:28:55,352 | WARNING | aiogram.dispatcher | Sleep for 4.478667 seconds and try again... (tryings = 5, bot id = 8587251551)
+2026-05-28 22:29:03,521 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:29:03,524 | WARNING | aiogram.dispatcher | Sleep for 5.001253 seconds and try again... (tryings = 6, bot id = 8587251551)
+2026-05-28 22:29:13,321 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:29:13,322 | WARNING | aiogram.dispatcher | Sleep for 5.022501 seconds and try again... (tryings = 7, bot id = 8587251551)
+2026-05-28 22:29:23,612 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:29:23,612 | WARNING | aiogram.dispatcher | Sleep for 5.102957 seconds and try again... (tryings = 8, bot id = 8587251551)
+2026-05-28 22:29:33,750 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:29:33,750 | WARNING | aiogram.dispatcher | Sleep for 4.819444 seconds and try again... (tryings = 9, bot id = 8587251551)
+2026-05-28 22:29:43,722 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:29:43,722 | WARNING | aiogram.dispatcher | Sleep for 4.906079 seconds and try again... (tryings = 10, bot id = 8587251551)
+2026-05-28 22:29:53,686 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:29:53,686 | WARNING | aiogram.dispatcher | Sleep for 4.971291 seconds and try again... (tryings = 11, bot id = 8587251551)
+2026-05-28 22:30:03,861 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:30:03,861 | WARNING | aiogram.dispatcher | Sleep for 4.957655 seconds and try again... (tryings = 12, bot id = 8587251551)
+2026-05-28 22:30:13,928 | ERROR | aiogram.dispatcher | Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-05-28 22:30:13,929 | WARNING | aiogram.dispatcher | Sleep for 5.008946 seconds and try again... (tryings = 13, bot id = 8587251551)
