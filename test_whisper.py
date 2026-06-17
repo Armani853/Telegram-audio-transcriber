@@ -18,7 +18,16 @@ from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 from dotenv import load_dotenv
-from groq import AsyncGroq
+from groq import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    PermissionDeniedError,
+    RateLimitError,
+    AsyncGroq,
+)
 import httpx
 
 
@@ -302,6 +311,37 @@ async def transcribe_with_groq(audio_path: Path) -> str:
     return str(text).strip()
 
 
+def describe_processing_error(exc: Exception) -> str:
+    """
+    Return a short user-safe explanation for the most common failures.
+    """
+    if isinstance(exc, AuthenticationError):
+        return "Groq API отклонил ключ. Проверь GROQ_API_KEY в переменных Amvera."
+
+    if isinstance(exc, PermissionDeniedError):
+        return "Groq API запретил запрос. Проверь права/доступность ключа Groq."
+
+    if isinstance(exc, RateLimitError):
+        return "Groq API временно ограничил запросы. Подожди немного и попробуй снова."
+
+    if isinstance(exc, BadRequestError):
+        return "Groq API не принял аудиофайл. Возможно, формат или размер файла не поддержан."
+
+    if isinstance(exc, APITimeoutError):
+        return "Groq API слишком долго отвечал. Попробуй голосовое покороче или повтори позже."
+
+    if isinstance(exc, APIConnectionError):
+        return "Не удалось подключиться к Groq API с хостинга. Это похоже на сетевую проблему Amvera/Groq."
+
+    if isinstance(exc, APIStatusError):
+        return f"Groq API вернул ошибку HTTP {exc.status_code}. Подробности смотри в логах Amvera."
+
+    if isinstance(exc, httpx.HTTPError):
+        return "Сетевая ошибка при обращении к внешнему API. Подробности смотри в логах Amvera."
+
+    return f"Техническая ошибка: {type(exc).__name__}. Подробности смотри в логах Amvera."
+
+
 def run_environment_check() -> int:
     """
     Check the local environment without sending data to external services.
@@ -502,10 +542,12 @@ async def audio_handler(message: Message, bot: Bot) -> None:
 
     except Exception as exc:
         logging.exception("Failed to process audio message: %s", exc)
+        reason = describe_processing_error(exc)
         await message.answer(
-            "Не получилось распознать аудио. Возможные причины: файл повреждён, "
-            "формат не поддерживается, аудио слишком длинное или временно недоступен Groq API. "
-            "Попробуй отправить другое .ogg/голосовое сообщение."
+            "Не получилось распознать аудио.\n\n"
+            f"Причина: {reason}\n\n"
+            "Попробуй отправить другое .ogg/голосовое сообщение или пришли мне лог Amvera "
+            "со строкой `Failed to process audio message`."
         )
 
     finally:

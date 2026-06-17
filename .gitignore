@@ -3,4 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 *.log
-.venv/
+bot.log
+bot_error.log
+bot_stdout.log
+*.ogg
