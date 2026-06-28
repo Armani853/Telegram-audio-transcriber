@@ -61,6 +61,11 @@ The standard cloud Telegram Bot API cannot download files larger than 20 MB.
 To accept 1-1.5 hour voice messages, run the official Telegram Bot API server
 near this bot and set `TELEGRAM_API_BASE`.
 
+Use a native Windows `telegram-bot-api.exe` for the first working setup. In
+`--local` mode Telegram returns local file paths, so the Python bot must run on
+the same machine and see the same filesystem as the Telegram Bot API server.
+Docker adds extra path-mapping work and is not the recommended first setup here.
+
 Example local server command:
 
 ```powershell

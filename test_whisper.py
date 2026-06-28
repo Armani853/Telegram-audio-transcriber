@@ -154,7 +154,10 @@ def create_bot() -> Bot:
     if telegram_proxy_url:
         session_kwargs["proxy"] = telegram_proxy_url
     if TELEGRAM_API_BASE:
-        session_kwargs["api"] = TelegramAPIServer.from_base(TELEGRAM_API_BASE)
+        session_kwargs["api"] = TelegramAPIServer.from_base(
+            TELEGRAM_API_BASE,
+            is_local=True,
+        )
 
     if session_kwargs:
         return Bot(token=TELEGRAM_BOT_TOKEN, session=AiohttpSession(**session_kwargs))
