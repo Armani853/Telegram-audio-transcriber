@@ -4,17 +4,20 @@ import logging
 from logging.handlers import RotatingFileHandler
 import mimetypes
 import os
+import re
+import shutil
 import sys
 import tempfile
 import uuid
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ChatAction
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 from dotenv import load_dotenv
@@ -37,10 +40,34 @@ import httpx
 
 load_dotenv()
 
+
+def read_positive_int_env(name: str, default: int) -> int:
+    """
+    Read a positive integer from environment variables.
+    """
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer.") from exc
+
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero.")
+
+    return value
+
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 TELEGRAM_PROXY_URL = os.getenv("TELEGRAM_PROXY_URL", "").strip()
 GROQ_PROXY_URL = os.getenv("GROQ_PROXY_URL", TELEGRAM_PROXY_URL).strip()
+TELEGRAM_API_BASE = os.getenv("TELEGRAM_API_BASE", "").strip()
+FFMPEG_BINARY = os.getenv("FFMPEG_BINARY", "ffmpeg").strip() or "ffmpeg"
+FFPROBE_BINARY = os.getenv("FFPROBE_BINARY", "ffprobe").strip() or "ffprobe"
+AUDIO_CHUNK_BITRATE = os.getenv("AUDIO_CHUNK_BITRATE", "64k").strip() or "64k"
 
 # Groq Whisper model
 GROQ_WHISPER_MODEL = "whisper-large-v3"
@@ -50,14 +77,27 @@ TRANSCRIPTION_LANGUAGE = "ru"
 
 # Telegram message length limit is 4096; keep margin for safety.
 TELEGRAM_SAFE_CHUNK_SIZE = 3500
+CLOUD_TELEGRAM_DOWNLOAD_LIMIT_BYTES = 20 * 1024 * 1024
 
-# Groq Whisper Large V3 max file size is 100 MB according to Groq docs.
-MAX_AUDIO_SIZE_BYTES = 100 * 1024 * 1024
+# Keep Groq uploads below the free-tier 25 MB direct upload limit.
+MAX_GROQ_CHUNK_BYTES = read_positive_int_env(
+    "MAX_GROQ_CHUNK_BYTES",
+    20 * 1024 * 1024,
+)
+
+# Local Telegram Bot API can download large files; keep a practical safety cap.
+MAX_TELEGRAM_INPUT_BYTES = read_positive_int_env(
+    "MAX_TELEGRAM_INPUT_BYTES",
+    2 * 1024 * 1024 * 1024,
+)
+AUDIO_CHUNK_SECONDS = read_positive_int_env("AUDIO_CHUNK_SECONDS", 15 * 60)
+AUDIO_CHUNK_OVERLAP_SECONDS = read_positive_int_env("AUDIO_CHUNK_OVERLAP_SECONDS", 5)
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 LOG_FILE = Path(__file__).with_name("bot_error.log")
 
 router = Router()
 groq_transcription_semaphore = asyncio.Semaphore(1)
+ProgressCallback = Callable[[int, int], Awaitable[None]]
 
 
 # ============================================================
@@ -76,6 +116,11 @@ def validate_config() -> None:
     if not GROQ_API_KEY:
         raise RuntimeError(
             "GROQ_API_KEY is missing. Add it to .env or environment variables."
+        )
+
+    if AUDIO_CHUNK_OVERLAP_SECONDS >= AUDIO_CHUNK_SECONDS:
+        raise RuntimeError(
+            "AUDIO_CHUNK_OVERLAP_SECONDS must be smaller than AUDIO_CHUNK_SECONDS."
         )
 
 
@@ -100,15 +145,19 @@ def get_groq_client() -> AsyncGroq:
 
 def create_bot() -> Bot:
     """
-    Create Telegram bot, optionally using TELEGRAM_PROXY_URL.
+    Create Telegram bot, optionally using TELEGRAM_PROXY_URL and local Bot API.
     """
     validate_config()
     telegram_proxy_url = get_effective_proxy_url(TELEGRAM_PROXY_URL)
+
+    session_kwargs = {}
     if telegram_proxy_url:
-        return Bot(
-            token=TELEGRAM_BOT_TOKEN,
-            session=AiohttpSession(proxy=telegram_proxy_url),
-        )
+        session_kwargs["proxy"] = telegram_proxy_url
+    if TELEGRAM_API_BASE:
+        session_kwargs["api"] = TelegramAPIServer.from_base(TELEGRAM_API_BASE)
+
+    if session_kwargs:
+        return Bot(token=TELEGRAM_BOT_TOKEN, session=AiohttpSession(**session_kwargs))
 
     return Bot(token=TELEGRAM_BOT_TOKEN)
 
@@ -311,10 +360,262 @@ async def transcribe_with_groq(audio_path: Path) -> str:
     return str(text).strip()
 
 
+def resolve_executable(command: str) -> str:
+    """
+    Resolve an executable name or direct path.
+    """
+    command_path = Path(command)
+    if command_path.is_file():
+        return str(command_path)
+
+    found_path = shutil.which(command)
+    if found_path:
+        return found_path
+
+    if sys.platform.startswith("win"):
+        local_app_data = os.getenv("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            winget_packages = Path(local_app_data) / "Microsoft" / "WinGet" / "Packages"
+            if winget_packages.is_dir():
+                executable_name = command
+                if not executable_name.lower().endswith(".exe"):
+                    executable_name = f"{executable_name}.exe"
+
+                matches = sorted(
+                    winget_packages.glob(f"**/{executable_name}"),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )
+                if matches:
+                    return str(matches[0])
+
+    return ""
+
+
+def has_executable(command: str) -> bool:
+    """
+    Check whether an executable name or direct path is available.
+    """
+    return bool(resolve_executable(command))
+
+
+async def run_subprocess(command: list[str]) -> str:
+    """
+    Run a subprocess and return stdout, raising a readable error on failure.
+    """
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+
+    stdout_text = stdout.decode("utf-8", errors="replace").strip()
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+
+    if process.returncode != 0:
+        raise RuntimeError(
+            "Command failed: "
+            f"{' '.join(command)}\n"
+            f"{stderr_text[-2000:]}"
+        )
+
+    return stdout_text
+
+
+async def get_audio_duration_seconds(audio_path: Path) -> float:
+    """
+    Return audio duration in seconds using ffprobe.
+    """
+    ffprobe_path = resolve_executable(FFPROBE_BINARY)
+    if not ffprobe_path:
+        raise RuntimeError(
+            "ffprobe is not installed. Install ffmpeg to process long audio files."
+        )
+
+    output = await run_subprocess(
+        [
+            ffprobe_path,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(audio_path),
+        ]
+    )
+
+    try:
+        duration = float(output)
+    except ValueError as exc:
+        raise RuntimeError(f"ffprobe returned invalid duration: {output}") from exc
+
+    if duration <= 0:
+        raise RuntimeError("Could not detect a positive audio duration.")
+
+    return duration
+
+
+async def split_audio_with_ffmpeg(audio_path: Path, chunk_dir: Path) -> list[Path]:
+    """
+    Split long audio into small MP3 chunks that stay below Groq upload limits.
+    """
+    ffmpeg_path = resolve_executable(FFMPEG_BINARY)
+    if not ffmpeg_path:
+        raise RuntimeError(
+            "ffmpeg is not installed. Install ffmpeg to process long audio files."
+        )
+
+    duration = await get_audio_duration_seconds(audio_path)
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+
+    chunks: list[Path] = []
+    stride_seconds = AUDIO_CHUNK_SECONDS - AUDIO_CHUNK_OVERLAP_SECONDS
+    start_seconds = 0.0
+    chunk_index = 1
+
+    while start_seconds < duration:
+        remaining_seconds = duration - start_seconds
+        chunk_duration = min(float(AUDIO_CHUNK_SECONDS), remaining_seconds)
+        if chunk_duration <= 0:
+            break
+
+        chunk_path = chunk_dir / f"chunk_{chunk_index:03d}.mp3"
+        await run_subprocess(
+            [
+                ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                f"{start_seconds:.3f}",
+                "-i",
+                str(audio_path),
+                "-t",
+                f"{chunk_duration:.3f}",
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-b:a",
+                AUDIO_CHUNK_BITRATE,
+                str(chunk_path),
+            ]
+        )
+
+        if not chunk_path.exists() or chunk_path.stat().st_size == 0:
+            raise RuntimeError(f"ffmpeg created an empty chunk: {chunk_path.name}")
+
+        if chunk_path.stat().st_size > MAX_GROQ_CHUNK_BYTES:
+            raise RuntimeError(
+                f"Audio chunk {chunk_path.name} is too large for Groq "
+                f"({chunk_path.stat().st_size} bytes). Reduce AUDIO_CHUNK_SECONDS "
+                "or AUDIO_CHUNK_BITRATE."
+            )
+
+        chunks.append(chunk_path)
+        if start_seconds + chunk_duration >= duration:
+            break
+
+        start_seconds += stride_seconds
+        chunk_index += 1
+
+    if not chunks:
+        raise RuntimeError("ffmpeg did not create any audio chunks.")
+
+    logging.info("Split audio into %s chunks", len(chunks))
+    return chunks
+
+
+def normalized_words(text: str) -> list[str]:
+    """
+    Normalize words for conservative duplicate detection at chunk boundaries.
+    """
+    return re.findall(r"[\wёЁ]+", text.lower(), flags=re.UNICODE)
+
+
+def merge_transcription_parts(parts: list[str]) -> str:
+    """
+    Merge chunk transcriptions and remove exact repeated word overlap.
+    """
+    cleaned_parts = [part.strip() for part in parts if part.strip()]
+    if not cleaned_parts:
+        return ""
+
+    merged = cleaned_parts[0]
+    merged_words = normalized_words(merged)
+
+    for part in cleaned_parts[1:]:
+        part_words = normalized_words(part)
+        overlap_words = 0
+        max_overlap = min(40, len(merged_words), len(part_words))
+
+        for candidate in range(max_overlap, 1, -1):
+            if merged_words[-candidate:] == part_words[:candidate]:
+                overlap_words = candidate
+                break
+
+        if overlap_words == 0:
+            merged = f"{merged}\n\n{part}"
+        else:
+            words_to_skip = overlap_words
+            split_words = part.split()
+            part_without_overlap = " ".join(split_words[words_to_skip:]).strip()
+            if part_without_overlap:
+                merged = f"{merged} {part_without_overlap}"
+
+        merged_words = normalized_words(merged)
+
+    return merged.strip()
+
+
+async def transcribe_audio_safely(
+    audio_path: Path,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> str:
+    """
+    Transcribe short files directly and long files through ffmpeg chunks.
+    """
+    audio_size = audio_path.stat().st_size
+    if audio_size <= MAX_GROQ_CHUNK_BYTES:
+        return await transcribe_with_groq(audio_path)
+
+    chunk_dir = Path(tempfile.mkdtemp(prefix="tg_voice_chunks_"))
+    try:
+        chunks = await split_audio_with_ffmpeg(audio_path, chunk_dir)
+        transcribed_parts: list[str] = []
+
+        for index, chunk_path in enumerate(chunks, start=1):
+            if progress_callback is not None:
+                await progress_callback(index, len(chunks))
+
+            logging.info(
+                "Transcribing chunk %s/%s name=%s size=%s",
+                index,
+                len(chunks),
+                chunk_path.name,
+                chunk_path.stat().st_size,
+            )
+            transcribed_parts.append(await transcribe_with_groq(chunk_path))
+
+        return merge_transcription_parts(transcribed_parts)
+    finally:
+        shutil.rmtree(chunk_dir, ignore_errors=True)
+
+
 def describe_processing_error(exc: Exception) -> str:
     """
     Return a short user-safe explanation for the most common failures.
     """
+    if isinstance(exc, TelegramBadRequest) and "file is too big" in str(exc).lower():
+        return (
+            "обычный Telegram Bot API не может скачать файл больше 20 МБ. "
+            "Запусти локальный Telegram Bot API server и укажи TELEGRAM_API_BASE."
+        )
+
     if isinstance(exc, AuthenticationError):
         return "Groq API отклонил ключ. Проверь GROQ_API_KEY в переменных Amvera."
 
@@ -339,6 +640,11 @@ def describe_processing_error(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPError):
         return "Сетевая ошибка при обращении к внешнему API. Подробности смотри в логах Amvera."
 
+    if isinstance(exc, RuntimeError) and (
+        "ffmpeg" in str(exc).lower() or "ffprobe" in str(exc).lower()
+    ):
+        return f"{exc}"
+
     return f"Техническая ошибка: {type(exc).__name__}. Подробности смотри в логах Amvera."
 
 
@@ -349,8 +655,11 @@ def run_environment_check() -> int:
     checks = [
         ("TELEGRAM_BOT_TOKEN", bool(TELEGRAM_BOT_TOKEN), True),
         ("GROQ_API_KEY", bool(GROQ_API_KEY), True),
+        ("TELEGRAM_API_BASE", bool(TELEGRAM_API_BASE), False),
         ("TELEGRAM_PROXY_URL", bool(TELEGRAM_PROXY_URL), False),
         ("GROQ_PROXY_URL", bool(GROQ_PROXY_URL), False),
+        ("ffmpeg", has_executable(FFMPEG_BINARY), True),
+        ("ffprobe", has_executable(FFPROBE_BINARY), True),
         ("voice.ogg", Path("voice.ogg").is_file(), True),
     ]
 
@@ -369,6 +678,17 @@ def run_environment_check() -> int:
     except RuntimeError as exc:
         print(f"\nConfiguration error: {exc}")
         return 1
+
+    print("\nLimits:")
+    print(
+        "- Telegram download mode: "
+        + ("local Bot API server" if TELEGRAM_API_BASE else "cloud Bot API (20 MB download limit)")
+    )
+    print(f"- Max Telegram input: {MAX_TELEGRAM_INPUT_BYTES // (1024 * 1024)} MB")
+    print(f"- Max Groq chunk upload: {MAX_GROQ_CHUNK_BYTES // (1024 * 1024)} MB")
+    print(f"- Audio chunk length: {AUDIO_CHUNK_SECONDS} seconds")
+    print(f"- Audio chunk overlap: {AUDIO_CHUNK_OVERLAP_SECONDS} seconds")
+    print(f"- Audio chunk bitrate: {AUDIO_CHUNK_BITRATE}")
 
     print("\nLocal checks passed. External APIs are not contacted by --check.")
     return 0
@@ -430,11 +750,20 @@ async def transcribe_local_file(audio_path: Path) -> int:
         print(f"File not found: {audio_path}")
         return 1
 
-    if audio_path.stat().st_size > MAX_AUDIO_SIZE_BYTES:
-        print("File is too large. Maximum size is 100 MB.")
+    if audio_path.stat().st_size > MAX_TELEGRAM_INPUT_BYTES:
+        print(
+            "File is too large. "
+            f"Maximum size is {MAX_TELEGRAM_INPUT_BYTES // (1024 * 1024)} MB."
+        )
         return 1
 
-    text = await transcribe_with_groq(audio_path)
+    async def print_chunk_progress(index: int, total: int) -> None:
+        print(f"Transcribing chunk {index}/{total}...")
+
+    text = await transcribe_audio_safely(
+        audio_path,
+        progress_callback=print_chunk_progress,
+    )
     print(text)
     return 0
 
@@ -491,9 +820,22 @@ async def audio_handler(message: Message, bot: Bot) -> None:
             file_size,
         )
 
-        if file_size is not None and file_size > MAX_AUDIO_SIZE_BYTES:
+        if (
+            file_size is not None
+            and file_size > CLOUD_TELEGRAM_DOWNLOAD_LIMIT_BYTES
+            and not TELEGRAM_API_BASE
+        ):
             await message.answer(
-                "Файл слишком большой для распознавания. Максимальный размер — 100 МБ."
+                "Этот файл больше 20 МБ. Обычный Telegram Bot API не даст мне его "
+                "скачать. Для таких длинных голосовых нужно запустить локальный "
+                "Telegram Bot API server и указать TELEGRAM_API_BASE."
+            )
+            return
+
+        if file_size is not None and file_size > MAX_TELEGRAM_INPUT_BYTES:
+            await message.answer(
+                "Файл слишком большой для этого запуска бота. "
+                f"Максимальный размер — {MAX_TELEGRAM_INPUT_BYTES // (1024 * 1024)} МБ."
             )
             return
 
@@ -515,9 +857,10 @@ async def audio_handler(message: Message, bot: Bot) -> None:
         if not local_path.exists() or local_path.stat().st_size == 0:
             raise RuntimeError("Downloaded file is empty or missing.")
 
-        if local_path.stat().st_size > MAX_AUDIO_SIZE_BYTES:
+        if local_path.stat().st_size > MAX_TELEGRAM_INPUT_BYTES:
             await message.answer(
-                "Файл слишком большой для распознавания. Максимальный размер — 100 МБ."
+                "Файл слишком большой для этого запуска бота. "
+                f"Максимальный размер — {MAX_TELEGRAM_INPUT_BYTES // (1024 * 1024)} МБ."
             )
             return
 
@@ -530,10 +873,25 @@ async def audio_handler(message: Message, bot: Bot) -> None:
         async with groq_transcription_semaphore:
             await safe_edit_message(
                 status_message,
-                "Аудио получено. Распознаю речь через Groq Whisper...",
+                "Аудио получено. Подготавливаю распознавание через Groq Whisper...",
             )
 
-            text = await transcribe_with_groq(local_path)
+            async def update_chunk_progress(index: int, total: int) -> None:
+                await safe_edit_message(
+                    status_message,
+                    f"Файл длинный. Распознаю часть {index} из {total}...",
+                )
+
+            if local_path.stat().st_size > MAX_GROQ_CHUNK_BYTES:
+                await safe_edit_message(
+                    status_message,
+                    "Файл длинный. Разбиваю аудио на части для точного распознавания...",
+                )
+
+            text = await transcribe_audio_safely(
+                local_path,
+                progress_callback=update_chunk_progress,
+            )
         logging.info("Groq transcription finished, text_length=%s", len(text))
 
         await send_long_message(message, text)
@@ -582,6 +940,11 @@ async def main() -> None:
     dp.include_router(router)
 
     logging.info("Checking Telegram connection...")
+    if TELEGRAM_API_BASE:
+        logging.info("Using local Telegram Bot API server: %s", TELEGRAM_API_BASE)
+    else:
+        logging.info("Using cloud Telegram Bot API; downloads over 20 MB are not available")
+
     me = await bot.get_me()
     logging.info("Bot connected as @%s", me.username)
     await bot.delete_webhook(drop_pending_updates=False)
