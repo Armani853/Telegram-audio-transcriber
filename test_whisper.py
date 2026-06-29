@@ -1,5 +1,7 @@
 import asyncio
 import argparse
+from dataclasses import dataclass
+from html import escape
 import logging
 from logging.handlers import RotatingFileHandler
 import mimetypes
@@ -8,11 +10,13 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 from urllib.parse import urlparse
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
@@ -68,6 +72,12 @@ TELEGRAM_API_BASE = os.getenv("TELEGRAM_API_BASE", "").strip()
 FFMPEG_BINARY = os.getenv("FFMPEG_BINARY", "ffmpeg").strip() or "ffmpeg"
 FFPROBE_BINARY = os.getenv("FFPROBE_BINARY", "ffprobe").strip() or "ffprobe"
 AUDIO_CHUNK_BITRATE = os.getenv("AUDIO_CHUNK_BITRATE", "64k").strip() or "64k"
+PUBLIC_UPLOAD_BASE_URL = os.getenv("PUBLIC_UPLOAD_BASE_URL", "").strip()
+UPLOAD_HOST = os.getenv("UPLOAD_HOST", "0.0.0.0").strip() or "0.0.0.0"
+UPLOAD_PORT = read_positive_int_env(
+    "PORT",
+    read_positive_int_env("UPLOAD_PORT", 8080),
+)
 
 # Groq Whisper model
 GROQ_WHISPER_MODEL = "whisper-large-v3"
@@ -90,14 +100,33 @@ MAX_TELEGRAM_INPUT_BYTES = read_positive_int_env(
     "MAX_TELEGRAM_INPUT_BYTES",
     2 * 1024 * 1024 * 1024,
 )
+MAX_UPLOAD_BYTES = read_positive_int_env(
+    "MAX_UPLOAD_BYTES",
+    MAX_TELEGRAM_INPUT_BYTES,
+)
+UPLOAD_TOKEN_TTL_SECONDS = read_positive_int_env(
+    "UPLOAD_TOKEN_TTL_SECONDS",
+    24 * 60 * 60,
+)
 AUDIO_CHUNK_SECONDS = read_positive_int_env("AUDIO_CHUNK_SECONDS", 15 * 60)
 AUDIO_CHUNK_OVERLAP_SECONDS = read_positive_int_env("AUDIO_CHUNK_OVERLAP_SECONDS", 5)
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 LOG_FILE = Path(__file__).with_name("bot_error.log")
+SUPPORTED_UPLOAD_SUFFIXES = {".ogg", ".opus", ".mp3", ".m4a", ".wav", ".webm"}
 
 router = Router()
 groq_transcription_semaphore = asyncio.Semaphore(1)
 ProgressCallback = Callable[[int, int], Awaitable[None]]
+
+
+@dataclass
+class UploadSession:
+    chat_id: int
+    created_at: float
+    used: bool = False
+
+
+upload_sessions: dict[str, UploadSession] = {}
 
 
 # ============================================================
@@ -297,6 +326,21 @@ async def send_long_message(message: Message, text: str) -> None:
         await message.answer(chunk)
 
 
+async def send_long_text(bot: Bot, chat_id: int, text: str) -> None:
+    """
+    Send long text in chunks because Telegram messages cannot exceed 4096 chars.
+    """
+    text = text.strip()
+
+    if not text:
+        await bot.send_message(chat_id=chat_id, text="Не удалось распознать речь: результат пустой.")
+        return
+
+    for start in range(0, len(text), TELEGRAM_SAFE_CHUNK_SIZE):
+        chunk = text[start:start + TELEGRAM_SAFE_CHUNK_SIZE]
+        await bot.send_message(chat_id=chat_id, text=chunk)
+
+
 async def safe_edit_message(message: Message, text: str) -> None:
     """
     Best-effort status update. Telegram can reject edits for old/deleted messages.
@@ -315,6 +359,331 @@ async def safe_delete_message(message: Message) -> None:
         await message.delete()
     except Exception as exc:
         logging.warning("Could not delete status message: %s", exc)
+
+
+def cleanup_upload_sessions() -> None:
+    """
+    Remove expired one-time upload sessions.
+    """
+    now = time.time()
+    expired_ids = [
+        upload_id
+        for upload_id, session in upload_sessions.items()
+        if now - session.created_at > UPLOAD_TOKEN_TTL_SECONDS
+    ]
+    for upload_id in expired_ids:
+        upload_sessions.pop(upload_id, None)
+
+
+def create_upload_session(chat_id: int) -> str:
+    """
+    Create a one-time upload session bound to a Telegram chat.
+    """
+    cleanup_upload_sessions()
+    upload_id = uuid.uuid4().hex
+    upload_sessions[upload_id] = UploadSession(chat_id=chat_id, created_at=time.time())
+    return upload_id
+
+
+def get_public_upload_base_url() -> str:
+    """
+    Return the public base URL used in Telegram messages.
+    """
+    if PUBLIC_UPLOAD_BASE_URL:
+        return PUBLIC_UPLOAD_BASE_URL.rstrip("/")
+    host = "localhost" if UPLOAD_HOST in {"0.0.0.0", "::"} else UPLOAD_HOST
+    return f"http://{host}:{UPLOAD_PORT}"
+
+
+def build_upload_url(upload_id: str) -> str:
+    """
+    Build a user-facing upload URL.
+    """
+    return f"{get_public_upload_base_url()}/upload/{upload_id}"
+
+
+def render_upload_page(upload_id: str, error: str = "") -> web.Response:
+    """
+    Render a small upload form for long audio files.
+    """
+    escaped_upload_id = escape(upload_id)
+    error_html = ""
+    if error:
+        error_html = f'<p class="error">{escape(error)}</p>'
+
+    html = f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Upload audio</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f6f8; color: #111827; }}
+    main {{ max-width: 520px; margin: 48px auto; padding: 24px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; }}
+    h1 {{ font-size: 22px; margin: 0 0 16px; }}
+    p {{ line-height: 1.45; }}
+    input, button {{ width: 100%; box-sizing: border-box; font-size: 16px; }}
+    input {{ margin: 12px 0 16px; }}
+    button {{ padding: 12px 16px; border: 0; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }}
+    .hint {{ color: #4b5563; font-size: 14px; }}
+    .error {{ color: #b91c1c; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Загрузка длинного аудио</h1>
+    <p>Выбери аудиофайл, и бот пришлет расшифровку в Telegram.</p>
+    {error_html}
+    <form action="/upload/{escaped_upload_id}" method="post" enctype="multipart/form-data">
+      <input name="audio_file" type="file" accept=".ogg,.opus,.mp3,.m4a,.wav,.webm,audio/*" required>
+      <button type="submit">Загрузить</button>
+    </form>
+    <p class="hint">Ссылка одноразовая. Максимальный размер: {MAX_UPLOAD_BYTES // (1024 * 1024)} МБ.</p>
+  </main>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
+def render_upload_result_page(title: str, body: str) -> web.Response:
+    """
+    Render a final upload page.
+    """
+    html = f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{escape(title)}</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f6f8; color: #111827; }}
+    main {{ max-width: 520px; margin: 48px auto; padding: 24px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; }}
+    h1 {{ font-size: 22px; margin: 0 0 16px; }}
+    p {{ line-height: 1.45; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>{escape(title)}</h1>
+    <p>{escape(body)}</p>
+  </main>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
+async def save_uploaded_audio(request: web.Request, destination: Path) -> str:
+    """
+    Save uploaded multipart audio to disk and return original file name.
+    """
+    reader = await request.multipart()
+    field = await reader.next()
+    if field is None or field.name != "audio_file" or not field.filename:
+        raise ValueError("Файл не найден в форме загрузки.")
+
+    original_name = Path(field.filename).name
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+        raise ValueError(
+            "Поддерживаются только аудиофайлы .ogg, .opus, .mp3, .m4a, .wav, .webm."
+        )
+
+    written_bytes = 0
+    with destination.open("wb") as output_file:
+        while True:
+            chunk = await field.read_chunk(size=1024 * 1024)
+            if not chunk:
+                break
+            written_bytes += len(chunk)
+            if written_bytes > MAX_UPLOAD_BYTES:
+                raise ValueError(
+                    f"Файл слишком большой. Максимальный размер — {MAX_UPLOAD_BYTES // (1024 * 1024)} МБ."
+                )
+            output_file.write(chunk)
+
+    if written_bytes == 0:
+        raise ValueError("Загруженный файл пустой.")
+
+    return original_name
+
+
+async def process_uploaded_audio(bot: Bot, chat_id: int, audio_path: Path, original_name: str) -> None:
+    """
+    Transcribe an uploaded audio file in the background and send text to Telegram.
+    """
+    status_message: Optional[Message] = None
+    try:
+        logging.info(
+            "Processing uploaded audio chat_id=%s original_name=%s path=%s size=%s",
+            chat_id,
+            original_name,
+            audio_path,
+            audio_path.stat().st_size if audio_path.exists() else None,
+        )
+        status_message = await bot.send_message(
+            chat_id=chat_id,
+            text="Файл загружен. Начинаю распознавание...",
+        )
+
+        if audio_path.stat().st_size > MAX_UPLOAD_BYTES:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "Файл слишком большой для этого запуска бота. "
+                    f"Максимальный размер — {MAX_UPLOAD_BYTES // (1024 * 1024)} МБ."
+                ),
+            )
+            return
+
+        if groq_transcription_semaphore.locked():
+            await safe_edit_message(
+                status_message,
+                "Файл загружен. Жду завершения предыдущего распознавания...",
+            )
+
+        async with groq_transcription_semaphore:
+            await safe_edit_message(
+                status_message,
+                "Файл получен. Подготавливаю распознавание через Groq Whisper...",
+            )
+
+            async def update_chunk_progress(index: int, total: int) -> None:
+                if status_message is not None:
+                    await safe_edit_message(
+                        status_message,
+                        f"Файл длинный. Распознаю часть {index} из {total}...",
+                    )
+
+            if audio_path.stat().st_size > MAX_GROQ_CHUNK_BYTES:
+                await safe_edit_message(
+                    status_message,
+                    "Файл длинный. Разбиваю аудио на части для точного распознавания...",
+                )
+
+            text = await transcribe_audio_safely(
+                audio_path,
+                progress_callback=update_chunk_progress,
+            )
+
+        logging.info("Uploaded audio transcription finished, text_length=%s", len(text))
+        await send_long_text(bot, chat_id, text)
+        if status_message is not None:
+            await safe_delete_message(status_message)
+        logging.info("Sent uploaded transcription to chat_id=%s", chat_id)
+
+    except Exception as exc:
+        logging.exception("Failed to process uploaded audio: %s", exc)
+        reason = describe_processing_error(exc)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "Не получилось распознать загруженное аудио.\n\n"
+                f"Причина: {reason}"
+            ),
+        )
+    finally:
+        try:
+            if audio_path.exists():
+                audio_path.unlink()
+        except Exception as cleanup_error:
+            logging.warning("Could not delete uploaded temp file %s: %s", audio_path, cleanup_error)
+
+
+async def health_handler(request: web.Request) -> web.Response:
+    """
+    Health endpoint for hosting checks.
+    """
+    return web.Response(text="OK")
+
+
+async def upload_page_handler(request: web.Request) -> web.Response:
+    """
+    Show a one-time upload page.
+    """
+    cleanup_upload_sessions()
+    upload_id = request.match_info["upload_id"]
+    session = upload_sessions.get(upload_id)
+    if session is None:
+        return render_upload_result_page("Ссылка недействительна", "Запроси новую ссылку командой /long.")
+    if session.used:
+        return render_upload_result_page("Ссылка уже использована", "Запроси новую ссылку командой /long.")
+    return render_upload_page(upload_id)
+
+
+async def upload_post_handler(request: web.Request) -> web.Response:
+    """
+    Accept an uploaded audio file and start background transcription.
+    """
+    cleanup_upload_sessions()
+    upload_id = request.match_info["upload_id"]
+    session = upload_sessions.get(upload_id)
+    if session is None:
+        return render_upload_result_page("Ссылка недействительна", "Запроси новую ссылку командой /long.")
+    if session.used:
+        return render_upload_result_page("Ссылка уже использована", "Запроси новую ссылку командой /long.")
+
+    session.used = True
+    temp_path: Optional[Path] = None
+    try:
+        temp_path = Path(tempfile.gettempdir()) / f"uploaded_audio_{uuid.uuid4().hex}.bin"
+        original_name = await save_uploaded_audio(request, temp_path)
+        suffix = Path(original_name).suffix.lower()
+        audio_path = temp_path.with_suffix(suffix)
+        temp_path.replace(audio_path)
+        temp_path = None
+
+        bot = request.app["bot"]
+        logging.info(
+            "Upload accepted upload_id=%s chat_id=%s original_name=%s path=%s",
+            upload_id,
+            session.chat_id,
+            original_name,
+            audio_path,
+        )
+        asyncio.create_task(
+            process_uploaded_audio(
+                bot=bot,
+                chat_id=session.chat_id,
+                audio_path=audio_path,
+                original_name=original_name,
+            )
+        )
+        return render_upload_result_page(
+            "Файл получен",
+            "Можно вернуться в Telegram. Бот пришлет расшифровку после обработки.",
+        )
+    except ValueError as exc:
+        session.used = False
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+        return render_upload_page(upload_id, error=str(exc))
+    except Exception as exc:
+        logging.exception("Failed to accept upload: %s", exc)
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+        return render_upload_result_page(
+            "Ошибка загрузки",
+            "Не удалось принять файл. Запроси новую ссылку командой /long.",
+        )
+
+
+async def start_upload_server(bot: Bot) -> web.AppRunner:
+    """
+    Start the embedded HTTP upload server.
+    """
+    app = web.Application(client_max_size=MAX_UPLOAD_BYTES + 10 * 1024 * 1024)
+    app["bot"] = bot
+    app.router.add_get("/health", health_handler)
+    app.router.add_get("/upload/{upload_id}", upload_page_handler)
+    app.router.add_post("/upload/{upload_id}", upload_post_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, UPLOAD_HOST, UPLOAD_PORT)
+    await site.start()
+    logging.info("Upload server started on http://%s:%s", UPLOAD_HOST, UPLOAD_PORT)
+    logging.info("Public upload base URL: %s", get_public_upload_base_url())
+    return runner
 
 
 async def download_telegram_file(bot: Bot, file_id: str, destination: Path) -> None:
@@ -659,6 +1028,7 @@ def run_environment_check() -> int:
         ("TELEGRAM_BOT_TOKEN", bool(TELEGRAM_BOT_TOKEN), True),
         ("GROQ_API_KEY", bool(GROQ_API_KEY), True),
         ("TELEGRAM_API_BASE", bool(TELEGRAM_API_BASE), False),
+        ("PUBLIC_UPLOAD_BASE_URL", bool(PUBLIC_UPLOAD_BASE_URL), False),
         ("TELEGRAM_PROXY_URL", bool(TELEGRAM_PROXY_URL), False),
         ("GROQ_PROXY_URL", bool(GROQ_PROXY_URL), False),
         ("ffmpeg", has_executable(FFMPEG_BINARY), True),
@@ -692,6 +1062,10 @@ def run_environment_check() -> int:
     print(f"- Audio chunk length: {AUDIO_CHUNK_SECONDS} seconds")
     print(f"- Audio chunk overlap: {AUDIO_CHUNK_OVERLAP_SECONDS} seconds")
     print(f"- Audio chunk bitrate: {AUDIO_CHUNK_BITRATE}")
+    print(f"- Upload server bind: {UPLOAD_HOST}:{UPLOAD_PORT}")
+    print(f"- Public upload base URL: {get_public_upload_base_url()}")
+    print(f"- Max direct upload: {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+    print(f"- Upload token TTL: {UPLOAD_TOKEN_TTL_SECONDS} seconds")
 
     print("\nLocal checks passed. External APIs are not contacted by --check.")
     return 0
@@ -780,7 +1154,8 @@ async def start_handler(message: Message) -> None:
     logging.info("Received /start from chat_id=%s", message.chat.id)
     await message.answer(
         "Привет! Отправь мне голосовое сообщение Telegram или .ogg аудиофайл, "
-        "и я расшифрую его в текст на русском языке."
+        "и я расшифрую его в текст на русском языке.\n\n"
+        "Для длинного файла больше 20 МБ отправь /long."
     )
 
 
@@ -792,7 +1167,20 @@ async def help_handler(message: Message) -> None:
         "1. Отправь обычное голосовое сообщение.\n"
         "2. Или отправь/перешли .ogg файл.\n"
         "3. Я скачаю аудио, отправлю его в Groq Whisper Large V3, "
-        "пришлю текст и удалю временный файл."
+        "пришлю текст и удалю временный файл.\n"
+        "4. Для длинного файла больше 20 МБ отправь /long и загрузи аудио по ссылке."
+    )
+
+
+@router.message(Command("long"))
+async def long_upload_handler(message: Message) -> None:
+    logging.info("Received /long from chat_id=%s", message.chat.id)
+    upload_id = create_upload_session(message.chat.id)
+    upload_url = build_upload_url(upload_id)
+    await message.answer(
+        "Для длинного аудио загрузи файл по этой одноразовой ссылке:\n\n"
+        f"{upload_url}\n\n"
+        "После загрузки я пришлю расшифровку сюда."
     )
 
 
@@ -830,8 +1218,9 @@ async def audio_handler(message: Message, bot: Bot) -> None:
         ):
             await message.answer(
                 "Этот файл больше 20 МБ. Обычный Telegram Bot API не даст мне его "
-                "скачать. Для таких длинных голосовых нужно запустить локальный "
-                "Telegram Bot API server и указать TELEGRAM_API_BASE."
+                "скачать напрямую из Telegram.\n\n"
+                "Отправь /long, загрузи аудио по ссылке, и я расшифрую его через "
+                "тот же Whisper-пайплайн."
             )
             return
 
@@ -926,7 +1315,7 @@ async def fallback_handler(message: Message) -> None:
     logging.info("Received unsupported message chat_id=%s", message.chat.id)
     await message.answer(
         "Отправь голосовое сообщение Telegram или .ogg аудиофайл, "
-        "и я переведу речь в текст."
+        "и я переведу речь в текст. Для длинного файла больше 20 МБ отправь /long."
     )
 
 
@@ -939,6 +1328,7 @@ async def main() -> None:
     configure_logging()
 
     bot = create_bot()
+    upload_runner: Optional[web.AppRunner] = None
     dp = Dispatcher()
     dp.include_router(router)
 
@@ -951,11 +1341,14 @@ async def main() -> None:
     me = await bot.get_me()
     logging.info("Bot connected as @%s", me.username)
     await bot.delete_webhook(drop_pending_updates=False)
+    upload_runner = await start_upload_server(bot)
     logging.info("Polling started. Press Ctrl+C to stop.")
 
     try:
         await dp.start_polling(bot)
     finally:
+        if upload_runner is not None:
+            await upload_runner.cleanup()
         await bot.session.close()
 
 

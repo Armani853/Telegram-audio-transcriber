@@ -23,6 +23,11 @@ them into safe chunks with `ffmpeg`.
    # GROQ_PROXY_URL=http://127.0.0.1:8080
    # Optional. Required for Telegram files larger than 20 MB.
    # TELEGRAM_API_BASE=http://localhost:8081
+   # Optional. Public URL for /long upload links.
+   # PUBLIC_UPLOAD_BASE_URL=https://your-public-domain
+   # Optional upload server settings.
+   # UPLOAD_HOST=0.0.0.0
+   # UPLOAD_PORT=8080
    ```
 
 3. Install `ffmpeg` if you want to transcribe long audio files:
@@ -57,9 +62,56 @@ them into safe chunks with `ffmpeg`.
 
 ## Long Telegram voice messages
 
+### Recommended: /long upload link
+
+If you cannot get Telegram `api_id` and `api_hash`, use the built-in upload
+page. It bypasses the Telegram Bot API 20 MB download limit because the file is
+uploaded directly to this bot's HTTP server.
+
+1. Set a public URL for the upload server:
+
+   ```env
+   PUBLIC_UPLOAD_BASE_URL=https://your-public-domain
+   ```
+
+   For Amvera, use the public app URL. For a local computer, use a tunnel such
+   as Cloudflare Tunnel or ngrok and put the tunnel URL here.
+
+2. Run the bot as usual:
+
+   ```powershell
+   python test_whisper.py
+   ```
+
+3. In Telegram, send:
+
+   ```text
+   /long
+   ```
+
+4. Open the one-time link, upload `.ogg`, `.opus`, `.mp3`, `.m4a`, `.wav`, or
+   `.webm`, then wait for the transcription in Telegram.
+
+Upload settings:
+
+```env
+MAX_UPLOAD_BYTES=2147483648
+UPLOAD_TOKEN_TTL_SECONDS=86400
+```
+
+The bot also exposes:
+
+```text
+GET /health
+GET /upload/<upload_id>
+POST /upload/<upload_id>
+```
+
+### Optional: local Telegram Bot API
+
 The standard cloud Telegram Bot API cannot download files larger than 20 MB.
-To accept 1-1.5 hour voice messages, run the official Telegram Bot API server
-near this bot and set `TELEGRAM_API_BASE`.
+To accept 1-1.5 hour voice messages sent directly as Telegram messages, run the
+official Telegram Bot API server near this bot and set `TELEGRAM_API_BASE`.
 
 Use a native Windows `telegram-bot-api.exe` for the first working setup. In
 `--local` mode Telegram returns local file paths, so the Python bot must run on
