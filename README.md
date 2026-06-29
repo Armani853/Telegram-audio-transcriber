@@ -89,6 +89,9 @@ uploaded directly to this bot's HTTP server.
    /long
    ```
 
+   If you send a Telegram file larger than 20 MB directly to the bot, it will
+   automatically create the same one-time upload link.
+
 4. Open the one-time link, upload `.ogg`, `.opus`, `.mp3`, `.m4a`, `.wav`, or
    `.webm`, then wait for the transcription in Telegram.
 

@@ -1216,11 +1216,14 @@ async def audio_handler(message: Message, bot: Bot) -> None:
             and file_size > CLOUD_TELEGRAM_DOWNLOAD_LIMIT_BYTES
             and not TELEGRAM_API_BASE
         ):
+            upload_id = create_upload_session(message.chat.id)
+            upload_url = build_upload_url(upload_id)
             await message.answer(
                 "Этот файл больше 20 МБ. Обычный Telegram Bot API не даст мне его "
                 "скачать напрямую из Telegram.\n\n"
-                "Отправь /long, загрузи аудио по ссылке, и я расшифрую его через "
-                "тот же Whisper-пайплайн."
+                "Я уже подготовил одноразовую ссылку для загрузки этого длинного аудио:\n\n"
+                f"{upload_url}\n\n"
+                "Открой ссылку, загрузи аудиофайл, и я пришлю расшифровку сюда."
             )
             return
 
