@@ -28,6 +28,7 @@ them into safe chunks with `ffmpeg`.
    # Optional upload server settings.
    # UPLOAD_HOST=0.0.0.0
    # UPLOAD_PORT=8080
+   # UPLOAD_CHUNK_BYTES=8388608
    ```
 
 3. Install `ffmpeg` if you want to transcribe long audio files:
@@ -62,7 +63,7 @@ them into safe chunks with `ffmpeg`.
 
 ## Long Telegram voice messages
 
-### Recommended: /long upload link
+### Recommended: /long upload button
 
 If you cannot get Telegram `api_id` and `api_hash`, use the built-in upload
 page. It bypasses the Telegram Bot API 20 MB download limit because the file is
@@ -74,8 +75,15 @@ uploaded directly to this bot's HTTP server.
    PUBLIC_UPLOAD_BASE_URL=https://your-public-domain
    ```
 
-   For Amvera, use the public app URL. For a local computer, use a tunnel such
-   as Cloudflare Tunnel or ngrok and put the tunnel URL here.
+   For Amvera, use the public app URL. For a local computer on the same Wi-Fi,
+   you can use the computer LAN address, for example:
+
+   ```env
+   PUBLIC_UPLOAD_BASE_URL=http://192.168.1.72:8080
+   ```
+
+   The phone must be able to open that URL. If Windows Firewall blocks it,
+   allow Python or port `8080` on the local network.
 
 2. Run the bot as usual:
 
@@ -89,16 +97,24 @@ uploaded directly to this bot's HTTP server.
    /long
    ```
 
-   If you send a Telegram file larger than 20 MB directly to the bot, it will
-   automatically create the same one-time upload link.
+   The bot sends an inline button that opens the upload page. If you send a
+   Telegram file larger than 20 MB directly to the bot, it automatically sends
+   the same upload button.
 
 4. Open the one-time link, upload `.ogg`, `.opus`, `.mp3`, `.m4a`, `.wav`, or
-   `.webm`, then wait for the transcription in Telegram.
+   `.webm`, then wait for the transcription in Telegram. The browser upload
+   uses chunks and can resume already uploaded chunks while the one-time link is
+   still alive.
+
+5. During processing, the bot edits one status message with the current stage.
+   Short transcriptions are sent as Telegram text. Long transcriptions are sent
+   as a text preview plus a full `.txt` file.
 
 Upload settings:
 
 ```env
 MAX_UPLOAD_BYTES=2147483648
+UPLOAD_CHUNK_BYTES=8388608
 UPLOAD_TOKEN_TTL_SECONDS=86400
 ```
 
@@ -108,7 +124,14 @@ The bot also exposes:
 GET /health
 GET /upload/<upload_id>
 POST /upload/<upload_id>
+POST /upload/<upload_id>/init
+PUT /upload/<upload_id>/chunk/<index>
+POST /upload/<upload_id>/complete
 ```
+
+The standard cloud Telegram Bot API still cannot download Telegram files larger
+than 20 MB. The upload button is the practical workaround when you do not have
+Telegram `api_id` and `api_hash`.
 
 ### Optional: local Telegram Bot API
 

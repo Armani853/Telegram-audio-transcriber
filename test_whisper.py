@@ -1,6 +1,7 @@
 import asyncio
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from html import escape
 import logging
 from logging.handlers import RotatingFileHandler
@@ -23,7 +24,7 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message
+from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from dotenv import load_dotenv
 from groq import (
     APIConnectionError,
@@ -88,6 +89,7 @@ TRANSCRIPTION_LANGUAGE = "ru"
 # Telegram message length limit is 4096; keep margin for safety.
 TELEGRAM_SAFE_CHUNK_SIZE = 3500
 CLOUD_TELEGRAM_DOWNLOAD_LIMIT_BYTES = 20 * 1024 * 1024
+LONG_TRANSCRIPTION_TEXT_THRESHOLD = TELEGRAM_SAFE_CHUNK_SIZE * 2
 
 # Keep Groq uploads below the free-tier 25 MB direct upload limit.
 MAX_GROQ_CHUNK_BYTES = read_positive_int_env(
@@ -103,6 +105,10 @@ MAX_TELEGRAM_INPUT_BYTES = read_positive_int_env(
 MAX_UPLOAD_BYTES = read_positive_int_env(
     "MAX_UPLOAD_BYTES",
     MAX_TELEGRAM_INPUT_BYTES,
+)
+UPLOAD_CHUNK_BYTES = read_positive_int_env(
+    "UPLOAD_CHUNK_BYTES",
+    8 * 1024 * 1024,
 )
 UPLOAD_TOKEN_TTL_SECONDS = read_positive_int_env(
     "UPLOAD_TOKEN_TTL_SECONDS",
@@ -124,6 +130,11 @@ class UploadSession:
     chat_id: int
     created_at: float
     used: bool = False
+    chunk_dir: Optional[Path] = None
+    file_name: str = ""
+    file_size: int = 0
+    total_chunks: int = 0
+    received_chunks: set[int] = field(default_factory=set)
 
 
 upload_sessions: dict[str, UploadSession] = {}
@@ -151,6 +162,9 @@ def validate_config() -> None:
         raise RuntimeError(
             "AUDIO_CHUNK_OVERLAP_SECONDS must be smaller than AUDIO_CHUNK_SECONDS."
         )
+
+    if UPLOAD_CHUNK_BYTES > MAX_UPLOAD_BYTES:
+        raise RuntimeError("UPLOAD_CHUNK_BYTES must be smaller than MAX_UPLOAD_BYTES.")
 
 
 def get_groq_client() -> AsyncGroq:
@@ -211,6 +225,22 @@ def get_effective_proxy_url(proxy_url: str) -> str:
         return ""
 
     return proxy_url
+
+
+def create_temp_directory(prefix: str) -> Path:
+    """
+    Create a temporary directory with predictable write permissions.
+    """
+    base_dir = Path(tempfile.gettempdir())
+    for _ in range(10):
+        candidate = base_dir / f"{prefix}{uuid.uuid4().hex}"
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            continue
+
+    raise RuntimeError("Could not create a temporary directory.")
 
 
 def configure_logging() -> None:
@@ -341,6 +371,47 @@ async def send_long_text(bot: Bot, chat_id: int, text: str) -> None:
         await bot.send_message(chat_id=chat_id, text=chunk)
 
 
+async def send_transcription_result(bot: Bot, chat_id: int, text: str) -> None:
+    """
+    Send short transcriptions as messages and long ones as preview plus .txt.
+    """
+    text = text.strip()
+
+    if not text:
+        await bot.send_message(chat_id=chat_id, text="Не удалось распознать речь: результат пустой.")
+        return
+
+    if len(text) <= LONG_TRANSCRIPTION_TEXT_THRESHOLD:
+        await send_long_text(bot, chat_id, text)
+        return
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text="Расшифровка длинная. Ниже пришлю начало, а полный текст отправлю .txt файлом.",
+    )
+
+    preview = text[:LONG_TRANSCRIPTION_TEXT_THRESHOLD].rstrip()
+    await send_long_text(bot, chat_id, f"{preview}\n\n[Полный текст в файле ниже]")
+
+    file_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    file_name = f"transcription_{file_stamp}.txt"
+    temp_path = Path(tempfile.gettempdir()) / f"transcription_{uuid.uuid4().hex}.txt"
+
+    try:
+        temp_path.write_text(text, encoding="utf-8")
+        await bot.send_document(
+            chat_id=chat_id,
+            document=FSInputFile(str(temp_path), filename=file_name),
+            caption="Полная расшифровка в текстовом файле.",
+        )
+    finally:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except Exception as cleanup_error:
+            logging.warning("Could not delete transcription txt file %s: %s", temp_path, cleanup_error)
+
+
 async def safe_edit_message(message: Message, text: str) -> None:
     """
     Best-effort status update. Telegram can reject edits for old/deleted messages.
@@ -361,6 +432,25 @@ async def safe_delete_message(message: Message) -> None:
         logging.warning("Could not delete status message: %s", exc)
 
 
+def cleanup_upload_chunk_dir(session: UploadSession) -> None:
+    """
+    Remove temporary chunk files for an upload session.
+    """
+    if session.chunk_dir is None:
+        return
+
+    try:
+        shutil.rmtree(session.chunk_dir, ignore_errors=True)
+    except Exception as exc:
+        logging.warning("Could not delete upload chunk dir %s: %s", session.chunk_dir, exc)
+    finally:
+        session.chunk_dir = None
+        session.received_chunks.clear()
+        session.file_name = ""
+        session.file_size = 0
+        session.total_chunks = 0
+
+
 def cleanup_upload_sessions() -> None:
     """
     Remove expired one-time upload sessions.
@@ -372,7 +462,9 @@ def cleanup_upload_sessions() -> None:
         if now - session.created_at > UPLOAD_TOKEN_TTL_SECONDS
     ]
     for upload_id in expired_ids:
-        upload_sessions.pop(upload_id, None)
+        session = upload_sessions.pop(upload_id, None)
+        if session is not None:
+            cleanup_upload_chunk_dir(session)
 
 
 def create_upload_session(chat_id: int) -> str:
@@ -402,44 +494,325 @@ def build_upload_url(upload_id: str) -> str:
     return f"{get_public_upload_base_url()}/upload/{upload_id}"
 
 
+def build_upload_keyboard(upload_url: str) -> InlineKeyboardMarkup:
+    """
+    Build a one-button keyboard that opens the upload page.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Загрузить длинное аудио",
+                    url=upload_url,
+                )
+            ]
+        ]
+    )
+
+
+def create_upload_prompt(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """
+    Create a one-time upload URL and Telegram inline keyboard.
+    """
+    upload_id = create_upload_session(chat_id)
+    upload_url = build_upload_url(upload_id)
+    text = (
+        "Файл больше 20 МБ, поэтому обычный Telegram Bot API не позволяет мне "
+        "скачать его автоматически.\n\n"
+        "Нажми кнопку ниже и выбери аудиофайл. После загрузки я сам пришлю "
+        "расшифровку сюда."
+    )
+    return text, build_upload_keyboard(upload_url)
+
+
 def render_upload_page(upload_id: str, error: str = "") -> web.Response:
     """
-    Render a small upload form for long audio files.
+    Render a mobile-friendly upload page with resumable chunked upload.
     """
     escaped_upload_id = escape(upload_id)
     error_html = ""
     if error:
-        error_html = f'<p class="error">{escape(error)}</p>'
+        error_html = f'<div class="notice error">{escape(error)}</div>'
 
     html = f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Upload audio</title>
+  <title>Загрузка аудио</title>
   <style>
-    body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f6f8; color: #111827; }}
-    main {{ max-width: 520px; margin: 48px auto; padding: 24px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; }}
-    h1 {{ font-size: 22px; margin: 0 0 16px; }}
-    p {{ line-height: 1.45; }}
-    input, button {{ width: 100%; box-sizing: border-box; font-size: 16px; }}
-    input {{ margin: 12px 0 16px; }}
-    button {{ padding: 12px 16px; border: 0; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }}
-    .hint {{ color: #4b5563; font-size: 14px; }}
-    .error {{ color: #b91c1c; }}
+    :root {{
+      color-scheme: light;
+      --bg: #f3f6fb;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #5f6b7a;
+      --line: #d9e0ea;
+      --accent: #1f7a5b;
+      --accent-strong: #155f46;
+      --danger: #b42318;
+      --danger-bg: #fff1f0;
+      --ok-bg: #ecfdf3;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+    }}
+    main {{
+      width: min(560px, calc(100vw - 28px));
+      margin: 28px auto;
+      padding: 22px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }}
+    h1 {{ margin: 0 0 10px; font-size: 24px; line-height: 1.2; }}
+    p {{ margin: 0 0 16px; line-height: 1.45; color: var(--muted); }}
+    .formats {{ margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 14px; }}
+    .picker {{
+      display: block;
+      width: 100%;
+      margin: 16px 0 10px;
+      padding: 16px;
+      border: 1px dashed #9aa8b8;
+      border-radius: 8px;
+      text-align: center;
+      cursor: pointer;
+      background: #fbfcfe;
+      color: var(--text);
+      font-weight: 700;
+    }}
+    input[type="file"] {{ display: none; }}
+    .file-info {{ min-height: 22px; margin: 10px 0 14px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }}
+    button {{
+      width: 100%;
+      min-height: 46px;
+      border: 0;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    #uploadButton {{ background: var(--accent); color: white; }}
+    #uploadButton:disabled {{ opacity: .55; cursor: not-allowed; }}
+    #cancelButton {{ margin-top: 10px; background: #eef2f6; color: var(--text); }}
+    .progress-wrap {{ display: none; margin: 16px 0 10px; }}
+    .progress-bar {{ width: 100%; height: 12px; overflow: hidden; background: #e8edf3; border-radius: 999px; }}
+    .progress-fill {{ width: 0%; height: 100%; background: var(--accent); transition: width .15s ease; }}
+    .progress-text {{ margin-top: 8px; color: var(--muted); font-size: 14px; }}
+    .notice {{ margin-top: 14px; padding: 12px; border-radius: 8px; line-height: 1.4; }}
+    .error {{ background: var(--danger-bg); color: var(--danger); }}
+    .success {{ background: var(--ok-bg); color: var(--accent-strong); }}
+    .hint {{ margin-top: 14px; font-size: 13px; color: var(--muted); }}
   </style>
 </head>
 <body>
   <main>
     <h1>Загрузка длинного аудио</h1>
-    <p>Выбери аудиофайл, и бот пришлет расшифровку в Telegram.</p>
+    <p>Выбери аудиофайл. После загрузки страницу можно закрыть, результат придет в Telegram.</p>
     {error_html}
-    <form action="/upload/{escaped_upload_id}" method="post" enctype="multipart/form-data">
-      <input name="audio_file" type="file" accept=".ogg,.opus,.mp3,.m4a,.wav,.webm,audio/*" required>
-      <button type="submit">Загрузить</button>
+    <div class="formats">
+      Форматы: .ogg, .opus, .mp3, .m4a, .wav, .webm<br>
+      Максимальный размер: {MAX_UPLOAD_BYTES // (1024 * 1024)} МБ
+    </div>
+    <form id="uploadForm" action="/upload/{escaped_upload_id}" method="post" enctype="multipart/form-data">
+      <label class="picker" for="audioFile">Выбрать аудиофайл</label>
+      <input id="audioFile" name="audio_file" type="file" accept=".ogg,.opus,.mp3,.m4a,.wav,.webm,audio/*" required>
+      <div id="fileInfo" class="file-info">Файл еще не выбран.</div>
+      <button id="uploadButton" type="submit" disabled>Загрузить</button>
+      <button id="cancelButton" type="button" hidden>Отменить загрузку</button>
     </form>
-    <p class="hint">Ссылка одноразовая. Максимальный размер: {MAX_UPLOAD_BYTES // (1024 * 1024)} МБ.</p>
+    <div id="progressWrap" class="progress-wrap">
+      <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+      <div id="progressText" class="progress-text">0%</div>
+    </div>
+    <div id="status"></div>
+    <div class="hint">Ссылка одноразовая и привязана к твоему чату.</div>
   </main>
+  <script>
+    const uploadId = "{escaped_upload_id}";
+    const maxUploadBytes = {MAX_UPLOAD_BYTES};
+    const supportedExtensions = [".ogg", ".opus", ".mp3", ".m4a", ".wav", ".webm"];
+    const fileInput = document.getElementById("audioFile");
+    const fileInfo = document.getElementById("fileInfo");
+    const form = document.getElementById("uploadForm");
+    const uploadButton = document.getElementById("uploadButton");
+    const cancelButton = document.getElementById("cancelButton");
+    const progressWrap = document.getElementById("progressWrap");
+    const progressFill = document.getElementById("progressFill");
+    const progressText = document.getElementById("progressText");
+    const statusBox = document.getElementById("status");
+    let cancelled = false;
+    let activeRequest = null;
+
+    function formatBytes(bytes) {{
+      if (!bytes) return "0 Б";
+      const units = ["Б", "КБ", "МБ", "ГБ"];
+      let value = bytes;
+      let unit = 0;
+      while (value >= 1024 && unit < units.length - 1) {{
+        value = value / 1024;
+        unit += 1;
+      }}
+      return `${{value.toFixed(value >= 10 || unit === 0 ? 0 : 1)}} ${{units[unit]}}`;
+    }}
+
+    function extensionOf(name) {{
+      const dot = name.lastIndexOf(".");
+      return dot === -1 ? "" : name.slice(dot).toLowerCase();
+    }}
+
+    function showStatus(message, kind) {{
+      statusBox.innerHTML = "";
+      const notice = document.createElement("div");
+      notice.className = `notice ${{kind}}`;
+      notice.textContent = message;
+      statusBox.appendChild(notice);
+    }}
+
+    function setProgress(percent, label) {{
+      const rounded = Math.max(0, Math.min(100, Math.round(percent)));
+      progressWrap.style.display = "block";
+      progressFill.style.width = `${{rounded}}%`;
+      progressText.textContent = label || `${{rounded}}%`;
+    }}
+
+    function requestJson(url, options) {{
+      return fetch(url, options).then(async (response) => {{
+        const data = await response.json().catch(() => ({{}}));
+        if (!response.ok) {{
+          throw new Error(data.error || "Сервер не принял запрос.");
+        }}
+        return data;
+      }});
+    }}
+
+    function putChunk(url, blob) {{
+      return new Promise((resolve, reject) => {{
+        const xhr = new XMLHttpRequest();
+        activeRequest = xhr;
+        xhr.open("PUT", url);
+        xhr.onload = () => {{
+          activeRequest = null;
+          if (xhr.status >= 200 && xhr.status < 300) {{
+            resolve(JSON.parse(xhr.responseText || "{{}}"));
+          }} else {{
+            try {{
+              const data = JSON.parse(xhr.responseText || "{{}}");
+              reject(new Error(data.error || "Не удалось загрузить часть файла."));
+            }} catch (error) {{
+              reject(new Error("Не удалось загрузить часть файла."));
+            }}
+          }}
+        }};
+        xhr.onerror = () => {{
+          activeRequest = null;
+          reject(new Error("Соединение оборвалось. Повтори загрузку, уже загруженные части сохранятся."));
+        }};
+        xhr.onabort = () => {{
+          activeRequest = null;
+          reject(new Error("Загрузка отменена."));
+        }};
+        xhr.send(blob);
+      }});
+    }}
+
+    fileInput.addEventListener("change", () => {{
+      const file = fileInput.files[0];
+      statusBox.innerHTML = "";
+      progressWrap.style.display = "none";
+      uploadButton.disabled = true;
+
+      if (!file) {{
+        fileInfo.textContent = "Файл еще не выбран.";
+        return;
+      }}
+
+      fileInfo.textContent = `${{file.name}} · ${{formatBytes(file.size)}}`;
+      const extension = extensionOf(file.name);
+      if (!supportedExtensions.includes(extension)) {{
+        showStatus("Этот формат не поддерживается. Выбери аудиофайл .ogg, .opus, .mp3, .m4a, .wav или .webm.", "error");
+        return;
+      }}
+      if (file.size > maxUploadBytes) {{
+        showStatus(`Файл слишком большой. Максимум: ${{formatBytes(maxUploadBytes)}}.`, "error");
+        return;
+      }}
+
+      uploadButton.disabled = false;
+    }});
+
+    cancelButton.addEventListener("click", () => {{
+      cancelled = true;
+      if (activeRequest) activeRequest.abort();
+      cancelButton.hidden = true;
+      uploadButton.disabled = false;
+      showStatus("Загрузка отменена. Можно нажать загрузку снова.", "error");
+    }});
+
+    form.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      cancelled = false;
+      uploadButton.disabled = true;
+      cancelButton.hidden = false;
+      statusBox.innerHTML = "";
+      setProgress(0, "Подготовка загрузки...");
+
+      try {{
+        const init = await requestJson(`/upload/${{uploadId}}/init`, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{ file_name: file.name, file_size: file.size }}),
+        }});
+
+        const chunkSize = init.chunk_size;
+        const totalChunks = init.total_chunks;
+        const received = new Set(init.received_chunks || []);
+
+        for (let index = 0; index < totalChunks; index += 1) {{
+          if (cancelled) throw new Error("Загрузка отменена.");
+          if (!received.has(index)) {{
+            const start = index * chunkSize;
+            const end = Math.min(file.size, start + chunkSize);
+            const blob = file.slice(start, end);
+            let uploaded = false;
+            for (let attempt = 1; attempt <= 3 && !uploaded; attempt += 1) {{
+              try {{
+                await putChunk(`/upload/${{uploadId}}/chunk/${{index}}`, blob);
+                uploaded = true;
+              }} catch (error) {{
+                if (attempt === 3) throw error;
+                await new Promise((resolve) => setTimeout(resolve, attempt * 900));
+              }}
+            }}
+          }}
+          const percent = ((index + 1) / totalChunks) * 100;
+          setProgress(percent, `Загрузка: ${{Math.round(percent)}}%`);
+        }}
+
+        await requestJson(`/upload/${{uploadId}}/complete`, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{}}),
+        }});
+
+        cancelButton.hidden = true;
+        setProgress(100, "Загрузка завершена");
+        showStatus("Файл получен. Можно закрыть страницу, результат придет в Telegram.", "success");
+      }} catch (error) {{
+        cancelButton.hidden = true;
+        uploadButton.disabled = false;
+        showStatus(error.message || "Не удалось загрузить файл.", "error");
+      }}
+    }});
+  </script>
 </body>
 </html>"""
     return web.Response(text=html, content_type="text/html")
@@ -470,6 +843,54 @@ def render_upload_result_page(title: str, body: str) -> web.Response:
 </body>
 </html>"""
     return web.Response(text=html, content_type="text/html")
+
+
+def get_active_upload_session(upload_id: str) -> UploadSession:
+    """
+    Return an upload session or raise a user-safe validation error.
+    """
+    cleanup_upload_sessions()
+    session = upload_sessions.get(upload_id)
+    if session is None:
+        raise ValueError("Ссылка недействительна. Запроси новую ссылку командой /long.")
+    if session.used:
+        raise ValueError("Ссылка уже использована. Запроси новую ссылку командой /long.")
+    return session
+
+
+def validate_upload_file_info(file_name: str, file_size: int) -> str:
+    """
+    Validate uploaded file metadata and return its safe basename.
+    """
+    safe_name = Path(file_name).name
+    suffix = Path(safe_name).suffix.lower()
+
+    if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+        raise ValueError(
+            "Поддерживаются только аудиофайлы .ogg, .opus, .mp3, .m4a, .wav, .webm."
+        )
+    if file_size <= 0:
+        raise ValueError("Загруженный файл пустой.")
+    if file_size > MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"Файл слишком большой. Максимальный размер — {MAX_UPLOAD_BYTES // (1024 * 1024)} МБ."
+        )
+
+    return safe_name
+
+
+def reset_upload_session_chunks(session: UploadSession) -> None:
+    """
+    Clear previous partial upload data before starting a different file.
+    """
+    cleanup_upload_chunk_dir(session)
+
+
+def json_error(message: str, status: int = 400) -> web.Response:
+    """
+    Return a JSON error response for the upload page JavaScript.
+    """
+    return web.json_response({"error": message}, status=status)
 
 
 async def save_uploaded_audio(request: web.Request, destination: Path) -> str:
@@ -512,6 +933,7 @@ async def process_uploaded_audio(bot: Bot, chat_id: int, audio_path: Path, origi
     Transcribe an uploaded audio file in the background and send text to Telegram.
     """
     status_message: Optional[Message] = None
+    started_at = time.monotonic()
     try:
         logging.info(
             "Processing uploaded audio chat_id=%s original_name=%s path=%s size=%s",
@@ -522,7 +944,7 @@ async def process_uploaded_audio(bot: Bot, chat_id: int, audio_path: Path, origi
         )
         status_message = await bot.send_message(
             chat_id=chat_id,
-            text="Файл загружен. Начинаю распознавание...",
+            text="Файл загружен.\nПодготовка аудио...",
         )
 
         if audio_path.stat().st_size > MAX_UPLOAD_BYTES:
@@ -538,26 +960,27 @@ async def process_uploaded_audio(bot: Bot, chat_id: int, audio_path: Path, origi
         if groq_transcription_semaphore.locked():
             await safe_edit_message(
                 status_message,
-                "Файл загружен. Жду завершения предыдущего распознавания...",
+                "Файл загружен.\nЖду завершения предыдущего распознавания...",
             )
 
         async with groq_transcription_semaphore:
             await safe_edit_message(
                 status_message,
-                "Файл получен. Подготавливаю распознавание через Groq Whisper...",
+                "Файл получен.\nПодготовка аудио для Groq Whisper...",
             )
 
             async def update_chunk_progress(index: int, total: int) -> None:
                 if status_message is not None:
+                    percent = round(index / total * 100)
                     await safe_edit_message(
                         status_message,
-                        f"Файл длинный. Распознаю часть {index} из {total}...",
+                        f"Расшифровка: {percent}%\nЧасть {index} из {total}",
                     )
 
             if audio_path.stat().st_size > MAX_GROQ_CHUNK_BYTES:
                 await safe_edit_message(
                     status_message,
-                    "Файл длинный. Разбиваю аудио на части для точного распознавания...",
+                    "Файл длинный.\nРазбиваю аудио на части для точного распознавания...",
                 )
 
             text = await transcribe_audio_safely(
@@ -566,9 +989,13 @@ async def process_uploaded_audio(bot: Bot, chat_id: int, audio_path: Path, origi
             )
 
         logging.info("Uploaded audio transcription finished, text_length=%s", len(text))
-        await send_long_text(bot, chat_id, text)
         if status_message is not None:
-            await safe_delete_message(status_message)
+            elapsed_seconds = int(time.monotonic() - started_at)
+            await safe_edit_message(
+                status_message,
+                f"Расшифровка завершена.\nВремя обработки: {elapsed_seconds // 60} мин {elapsed_seconds % 60} сек",
+            )
+        await send_transcription_result(bot, chat_id, text)
         logging.info("Sent uploaded transcription to chat_id=%s", chat_id)
 
     except Exception as exc:
@@ -594,6 +1021,177 @@ async def health_handler(request: web.Request) -> web.Response:
     Health endpoint for hosting checks.
     """
     return web.Response(text="OK")
+
+
+async def upload_init_handler(request: web.Request) -> web.Response:
+    """
+    Initialize or resume a chunked upload.
+    """
+    upload_id = request.match_info["upload_id"]
+
+    try:
+        session = get_active_upload_session(upload_id)
+        payload = await request.json()
+        file_name = str(payload.get("file_name", ""))
+        file_size = int(payload.get("file_size", 0))
+        safe_name = validate_upload_file_info(file_name, file_size)
+
+        same_file = (
+            session.chunk_dir is not None
+            and session.file_name == safe_name
+            and session.file_size == file_size
+        )
+        if not same_file:
+            reset_upload_session_chunks(session)
+            session.chunk_dir = create_temp_directory(prefix=f"tg_upload_{upload_id[:8]}_")
+            session.file_name = safe_name
+            session.file_size = file_size
+            session.total_chunks = (file_size + UPLOAD_CHUNK_BYTES - 1) // UPLOAD_CHUNK_BYTES
+            session.received_chunks.clear()
+
+        if session.chunk_dir is None:
+            raise ValueError("Не удалось подготовить временную папку загрузки.")
+
+        existing_chunks: set[int] = set()
+        for index in range(session.total_chunks):
+            chunk_path = session.chunk_dir / f"chunk_{index:05d}.part"
+            expected_size = min(
+                UPLOAD_CHUNK_BYTES,
+                session.file_size - index * UPLOAD_CHUNK_BYTES,
+            )
+            if chunk_path.exists() and chunk_path.stat().st_size == expected_size:
+                existing_chunks.add(index)
+        session.received_chunks = existing_chunks
+
+        return web.json_response(
+            {
+                "chunk_size": UPLOAD_CHUNK_BYTES,
+                "total_chunks": session.total_chunks,
+                "received_chunks": sorted(session.received_chunks),
+                "max_upload_bytes": MAX_UPLOAD_BYTES,
+            }
+        )
+    except ValueError as exc:
+        return json_error(str(exc))
+    except Exception as exc:
+        logging.exception("Failed to initialize upload: %s", exc)
+        return json_error("Не удалось подготовить загрузку. Запроси новую ссылку командой /long.", 500)
+
+
+async def upload_chunk_handler(request: web.Request) -> web.Response:
+    """
+    Accept one chunk of a resumable upload.
+    """
+    upload_id = request.match_info["upload_id"]
+
+    try:
+        chunk_index = int(request.match_info["index"])
+        session = get_active_upload_session(upload_id)
+
+        if session.chunk_dir is None or session.total_chunks <= 0:
+            raise ValueError("Сначала выбери файл и начни загрузку заново.")
+        if chunk_index < 0 or chunk_index >= session.total_chunks:
+            raise ValueError("Неверный номер части файла.")
+
+        chunk_path = session.chunk_dir / f"chunk_{chunk_index:05d}.part"
+        expected_size = min(
+            UPLOAD_CHUNK_BYTES,
+            session.file_size - chunk_index * UPLOAD_CHUNK_BYTES,
+        )
+        if chunk_path.exists() and chunk_path.stat().st_size == expected_size:
+            session.received_chunks.add(chunk_index)
+            return web.json_response({"received_chunks": sorted(session.received_chunks)})
+
+        written_bytes = 0
+        try:
+            with chunk_path.open("wb") as output_file:
+                async for body_part in request.content.iter_chunked(1024 * 1024):
+                    written_bytes += len(body_part)
+                    if written_bytes > expected_size:
+                        raise ValueError("Полученная часть файла больше ожидаемого размера.")
+                    output_file.write(body_part)
+
+            if written_bytes != expected_size:
+                raise ValueError("Часть файла загрузилась не полностью. Повтори загрузку.")
+
+            session.received_chunks.add(chunk_index)
+        finally:
+            if written_bytes != expected_size and chunk_path.exists():
+                chunk_path.unlink()
+
+        return web.json_response({"received_chunks": sorted(session.received_chunks)})
+    except ValueError as exc:
+        return json_error(str(exc))
+    except Exception as exc:
+        logging.exception("Failed to accept upload chunk: %s", exc)
+        return json_error("Не удалось принять часть файла. Повтори загрузку.", 500)
+
+
+async def upload_complete_handler(request: web.Request) -> web.Response:
+    """
+    Assemble uploaded chunks and start background transcription.
+    """
+    upload_id = request.match_info["upload_id"]
+    audio_path: Optional[Path] = None
+
+    try:
+        session = get_active_upload_session(upload_id)
+        if session.chunk_dir is None or session.total_chunks <= 0:
+            raise ValueError("Файл еще не загружен.")
+
+        missing_chunks = [
+            index
+            for index in range(session.total_chunks)
+            if index not in session.received_chunks
+        ]
+        if missing_chunks:
+            raise ValueError("Не все части файла загружены. Повтори загрузку.")
+
+        original_name = session.file_name
+        suffix = Path(original_name).suffix.lower()
+        audio_path = Path(tempfile.gettempdir()) / f"uploaded_audio_{uuid.uuid4().hex}{suffix}"
+
+        with audio_path.open("wb") as output_file:
+            for index in range(session.total_chunks):
+                chunk_path = session.chunk_dir / f"chunk_{index:05d}.part"
+                if not chunk_path.exists():
+                    raise ValueError("Не все части файла найдены. Повтори загрузку.")
+                with chunk_path.open("rb") as input_file:
+                    shutil.copyfileobj(input_file, output_file)
+
+        if not audio_path.exists() or audio_path.stat().st_size != session.file_size:
+            raise ValueError("Итоговый файл собрался некорректно. Повтори загрузку.")
+
+        session.used = True
+        cleanup_upload_chunk_dir(session)
+
+        bot = request.app["bot"]
+        logging.info(
+            "Chunked upload accepted upload_id=%s chat_id=%s original_name=%s path=%s",
+            upload_id,
+            session.chat_id,
+            original_name,
+            audio_path,
+        )
+        asyncio.create_task(
+            process_uploaded_audio(
+                bot=bot,
+                chat_id=session.chat_id,
+                audio_path=audio_path,
+                original_name=original_name,
+            )
+        )
+
+        return web.json_response({"ok": True})
+    except ValueError as exc:
+        if audio_path is not None and audio_path.exists():
+            audio_path.unlink()
+        return json_error(str(exc))
+    except Exception as exc:
+        logging.exception("Failed to complete chunked upload: %s", exc)
+        if audio_path is not None and audio_path.exists():
+            audio_path.unlink()
+        return json_error("Не удалось собрать файл. Запроси новую ссылку командой /long.", 500)
 
 
 async def upload_page_handler(request: web.Request) -> web.Response:
@@ -622,15 +1220,16 @@ async def upload_post_handler(request: web.Request) -> web.Response:
     if session.used:
         return render_upload_result_page("Ссылка уже использована", "Запроси новую ссылку командой /long.")
 
-    session.used = True
     temp_path: Optional[Path] = None
     try:
+        cleanup_upload_chunk_dir(session)
         temp_path = Path(tempfile.gettempdir()) / f"uploaded_audio_{uuid.uuid4().hex}.bin"
         original_name = await save_uploaded_audio(request, temp_path)
         suffix = Path(original_name).suffix.lower()
         audio_path = temp_path.with_suffix(suffix)
         temp_path.replace(audio_path)
         temp_path = None
+        session.used = True
 
         bot = request.app["bot"]
         logging.info(
@@ -658,6 +1257,7 @@ async def upload_post_handler(request: web.Request) -> web.Response:
             temp_path.unlink()
         return render_upload_page(upload_id, error=str(exc))
     except Exception as exc:
+        session.used = False
         logging.exception("Failed to accept upload: %s", exc)
         if temp_path is not None and temp_path.exists():
             temp_path.unlink()
@@ -676,6 +1276,9 @@ async def start_upload_server(bot: Bot) -> web.AppRunner:
     app.router.add_get("/health", health_handler)
     app.router.add_get("/upload/{upload_id}", upload_page_handler)
     app.router.add_post("/upload/{upload_id}", upload_post_handler)
+    app.router.add_post("/upload/{upload_id}/init", upload_init_handler)
+    app.router.add_put("/upload/{upload_id}/chunk/{index}", upload_chunk_handler)
+    app.router.add_post("/upload/{upload_id}/complete", upload_complete_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -955,7 +1558,7 @@ async def transcribe_audio_safely(
     if audio_size <= MAX_GROQ_CHUNK_BYTES:
         return await transcribe_with_groq(audio_path)
 
-    chunk_dir = Path(tempfile.mkdtemp(prefix="tg_voice_chunks_"))
+    chunk_dir = create_temp_directory(prefix="tg_voice_chunks_")
     try:
         chunks = await split_audio_with_ffmpeg(audio_path, chunk_dir)
         transcribed_parts: list[str] = []
@@ -1065,6 +1668,7 @@ def run_environment_check() -> int:
     print(f"- Upload server bind: {UPLOAD_HOST}:{UPLOAD_PORT}")
     print(f"- Public upload base URL: {get_public_upload_base_url()}")
     print(f"- Max direct upload: {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+    print(f"- Browser upload chunk size: {UPLOAD_CHUNK_BYTES // (1024 * 1024)} MB")
     print(f"- Upload token TTL: {UPLOAD_TOKEN_TTL_SECONDS} seconds")
 
     print("\nLocal checks passed. External APIs are not contacted by --check.")
@@ -1155,7 +1759,7 @@ async def start_handler(message: Message) -> None:
     await message.answer(
         "Привет! Отправь мне голосовое сообщение Telegram или .ogg аудиофайл, "
         "и я расшифрую его в текст на русском языке.\n\n"
-        "Для длинного файла больше 20 МБ отправь /long."
+        "Для длинного файла больше 20 МБ отправь /long и загрузи аудио через кнопку."
     )
 
 
@@ -1168,20 +1772,15 @@ async def help_handler(message: Message) -> None:
         "2. Или отправь/перешли .ogg файл.\n"
         "3. Я скачаю аудио, отправлю его в Groq Whisper Large V3, "
         "пришлю текст и удалю временный файл.\n"
-        "4. Для длинного файла больше 20 МБ отправь /long и загрузи аудио по ссылке."
+        "4. Для длинного файла больше 20 МБ отправь /long и загрузи аудио через кнопку."
     )
 
 
 @router.message(Command("long"))
 async def long_upload_handler(message: Message) -> None:
     logging.info("Received /long from chat_id=%s", message.chat.id)
-    upload_id = create_upload_session(message.chat.id)
-    upload_url = build_upload_url(upload_id)
-    await message.answer(
-        "Для длинного аудио загрузи файл по этой одноразовой ссылке:\n\n"
-        f"{upload_url}\n\n"
-        "После загрузки я пришлю расшифровку сюда."
-    )
+    text, keyboard = create_upload_prompt(message.chat.id)
+    await message.answer(text, reply_markup=keyboard)
 
 
 @router.message(F.voice | F.audio | F.document)
@@ -1216,15 +1815,8 @@ async def audio_handler(message: Message, bot: Bot) -> None:
             and file_size > CLOUD_TELEGRAM_DOWNLOAD_LIMIT_BYTES
             and not TELEGRAM_API_BASE
         ):
-            upload_id = create_upload_session(message.chat.id)
-            upload_url = build_upload_url(upload_id)
-            await message.answer(
-                "Этот файл больше 20 МБ. Обычный Telegram Bot API не даст мне его "
-                "скачать напрямую из Telegram.\n\n"
-                "Я уже подготовил одноразовую ссылку для загрузки этого длинного аудио:\n\n"
-                f"{upload_url}\n\n"
-                "Открой ссылку, загрузи аудиофайл, и я пришлю расшифровку сюда."
-            )
+            text, keyboard = create_upload_prompt(message.chat.id)
+            await message.answer(text, reply_markup=keyboard)
             return
 
         if file_size is not None and file_size > MAX_TELEGRAM_INPUT_BYTES:
@@ -1235,7 +1827,8 @@ async def audio_handler(message: Message, bot: Bot) -> None:
             return
 
         await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-        status_message = await message.answer("Скачиваю аудио и начинаю распознавание...")
+        started_at = time.monotonic()
+        status_message = await message.answer("Скачиваю аудио...\nПодготовка распознавания...")
 
         safe_suffix = ".ogg"
         if "." in original_name:
@@ -1262,25 +1855,26 @@ async def audio_handler(message: Message, bot: Bot) -> None:
         if groq_transcription_semaphore.locked():
             await safe_edit_message(
                 status_message,
-                "Аудио получено. Жду завершения предыдущего распознавания...",
+                "Аудио получено.\nЖду завершения предыдущего распознавания...",
             )
 
         async with groq_transcription_semaphore:
             await safe_edit_message(
                 status_message,
-                "Аудио получено. Подготавливаю распознавание через Groq Whisper...",
+                "Аудио получено.\nПодготовка аудио для Groq Whisper...",
             )
 
             async def update_chunk_progress(index: int, total: int) -> None:
+                percent = round(index / total * 100)
                 await safe_edit_message(
                     status_message,
-                    f"Файл длинный. Распознаю часть {index} из {total}...",
+                    f"Расшифровка: {percent}%\nЧасть {index} из {total}",
                 )
 
             if local_path.stat().st_size > MAX_GROQ_CHUNK_BYTES:
                 await safe_edit_message(
                     status_message,
-                    "Файл длинный. Разбиваю аудио на части для точного распознавания...",
+                    "Файл длинный.\nРазбиваю аудио на части для точного распознавания...",
                 )
 
             text = await transcribe_audio_safely(
@@ -1289,8 +1883,12 @@ async def audio_handler(message: Message, bot: Bot) -> None:
             )
         logging.info("Groq transcription finished, text_length=%s", len(text))
 
-        await send_long_message(message, text)
-        await safe_delete_message(status_message)
+        elapsed_seconds = int(time.monotonic() - started_at)
+        await safe_edit_message(
+            status_message,
+            f"Расшифровка завершена.\nВремя обработки: {elapsed_seconds // 60} мин {elapsed_seconds % 60} сек",
+        )
+        await send_transcription_result(bot, message.chat.id, text)
         logging.info("Sent transcription to chat_id=%s", message.chat.id)
 
     except Exception as exc:
