@@ -270,6 +270,8 @@ class YouTubeDownloadService:
         self._db_lock = asyncio.Lock()
         self._download_semaphore = asyncio.Semaphore(config.max_concurrent_downloads)
         self._key_locks: dict[str, asyncio.Lock] = {}
+        self._records_by_cache_key: dict[str, YouTubeDownloadRecord] = {}
+        self._records_by_token: dict[str, YouTubeDownloadRecord] = {}
         self.requests: dict[str, YouTubeDownloadRequest] = {}
         self.cleanup_task: Optional[asyncio.Task] = None
         self._create_schema()
@@ -322,6 +324,17 @@ class YouTubeDownloadService:
             """
         )
         self.connection.commit()
+        now = time.time()
+        rows = self.connection.execute(
+            "SELECT * FROM youtube_downloads WHERE expires_at > ?",
+            (now,),
+        ).fetchall()
+        for row in rows:
+            record = self._record_from_row(row)
+            if not record.file_path.is_file():
+                continue
+            self._records_by_cache_key[record.cache_key] = record
+            self._records_by_token[record.token] = record
 
     async def start(self) -> None:
         await self.cleanup_expired()
@@ -413,6 +426,12 @@ class YouTubeDownloadService:
 
     async def get_cached(self, video_id: str, quality: str) -> Optional[YouTubeDownloadRecord]:
         cache_key = f"{video_id}:{quality}"
+        memory_record = self._records_by_cache_key.get(cache_key)
+        if memory_record is not None:
+            if memory_record.expires_at <= time.time() or not memory_record.file_path.is_file():
+                await self._delete_record(memory_record)
+                return None
+            return await self.touch_record(memory_record)
         row = await self._fetchone(
             "SELECT * FROM youtube_downloads WHERE cache_key = ?",
             (cache_key,),
@@ -423,9 +442,17 @@ class YouTubeDownloadService:
         if record.expires_at <= time.time() or not record.file_path.is_file():
             await self._delete_record(record)
             return None
+        self._records_by_cache_key[record.cache_key] = record
+        self._records_by_token[record.token] = record
         return await self.touch_record(record)
 
     async def get_by_token(self, token: str) -> Optional[YouTubeDownloadRecord]:
+        memory_record = self._records_by_token.get(token)
+        if memory_record is not None:
+            if memory_record.expires_at <= time.time() or not memory_record.file_path.is_file():
+                await self._delete_record(memory_record)
+                return None
+            return await self.touch_record(memory_record)
         row = await self._fetchone(
             "SELECT * FROM youtube_downloads WHERE token = ?",
             (token,),
@@ -436,18 +463,26 @@ class YouTubeDownloadService:
         if record.expires_at <= time.time() or not record.file_path.is_file():
             await self._delete_record(record)
             return None
+        self._records_by_cache_key[record.cache_key] = record
+        self._records_by_token[record.token] = record
         return await self.touch_record(record)
 
     async def touch_record(self, record: YouTubeDownloadRecord) -> YouTubeDownloadRecord:
         """Keep an actively opened or resumed download alive for another full TTL."""
-        new_expiry = max(record.expires_at, time.time() + self.config.ttl_seconds)
-        if new_expiry <= record.expires_at:
+        now = time.time()
+        refresh_window = max(60, self.config.ttl_seconds // 10)
+        target_expiry = now + self.config.ttl_seconds
+        if record.expires_at >= target_expiry - refresh_window:
             return record
+        new_expiry = max(record.expires_at, target_expiry)
         await self._execute(
             "UPDATE youtube_downloads SET expires_at = ? WHERE cache_key = ?",
             (new_expiry, record.cache_key),
         )
-        return replace(record, expires_at=new_expiry)
+        touched = replace(record, expires_at=new_expiry)
+        self._records_by_cache_key[touched.cache_key] = touched
+        self._records_by_token[touched.token] = touched
+        return touched
 
     def _notification_from_row(self, row: sqlite3.Row) -> YouTubeDownloadNotification:
         return YouTubeDownloadNotification(
@@ -535,6 +570,8 @@ class YouTubeDownloadService:
         )
 
     async def _delete_record(self, record: YouTubeDownloadRecord) -> None:
+        self._records_by_cache_key.pop(record.cache_key, None)
+        self._records_by_token.pop(record.token, None)
         try:
             if record.file_path.is_file():
                 record.file_path.unlink()
@@ -727,6 +764,8 @@ class YouTubeDownloadService:
                         record.expires_at,
                     ),
                 )
+                self._records_by_cache_key[record.cache_key] = record
+                self._records_by_token[record.token] = record
                 return record, False, time.monotonic() - started_at
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)

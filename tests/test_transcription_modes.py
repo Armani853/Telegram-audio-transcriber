@@ -393,6 +393,18 @@ class YouTubeUrlTests(unittest.TestCase):
 
 
 class YouTubePipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        bot.youtube_metadata_cache.clear()
+        bot.youtube_metadata_tasks.clear()
+        bot.youtube_transcript_cache.clear()
+        bot.youtube_transcript_tasks.clear()
+
+    async def asyncTearDown(self):
+        bot.youtube_metadata_cache.clear()
+        bot.youtube_metadata_tasks.clear()
+        bot.youtube_transcript_cache.clear()
+        bot.youtube_transcript_tasks.clear()
+
     async def test_youtube_result_is_always_sent_as_txt_document(self):
         class CapturingBot(FakeBot):
             async def send_document(self, chat_id, document, caption):

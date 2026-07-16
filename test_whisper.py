@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
@@ -108,6 +108,7 @@ UPLOAD_PORT = read_positive_int_env(
     "PORT",
     read_positive_int_env("UPLOAD_PORT", 8080),
 )
+HTTP_LISTEN_BACKLOG = read_positive_int_env("HTTP_LISTEN_BACKLOG", 2048)
 
 # Groq Whisper model
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3").strip() or "whisper-large-v3"
@@ -175,6 +176,22 @@ YOUTUBE_DOWNLOAD_TIMEOUT_SECONDS = read_positive_int_env("YOUTUBE_DOWNLOAD_TIMEO
 YOUTUBE_AUDIO_FORMAT = os.getenv("YOUTUBE_AUDIO_FORMAT", "mp3").strip().lower() or "mp3"
 YOUTUBE_MAX_ACTIVE_JOBS_PER_CHAT = read_positive_int_env("YOUTUBE_MAX_ACTIVE_JOBS_PER_CHAT", 1)
 STT_MAX_CONCURRENT_JOBS = read_positive_int_env("STT_MAX_CONCURRENT_JOBS", 1)
+YOUTUBE_METADATA_CACHE_TTL_SECONDS = read_positive_int_env(
+    "YOUTUBE_METADATA_CACHE_TTL_SECONDS",
+    10 * 60,
+)
+YOUTUBE_TRANSCRIPT_CACHE_TTL_SECONDS = read_positive_int_env(
+    "YOUTUBE_TRANSCRIPT_CACHE_TTL_SECONDS",
+    6 * 60 * 60,
+)
+YOUTUBE_TRANSCRIPT_MAX_CONCURRENT_BUILDS = read_positive_int_env(
+    "YOUTUBE_TRANSCRIPT_MAX_CONCURRENT_BUILDS",
+    2,
+)
+YOUTUBE_RESULT_MAX_CONCURRENT_SENDS = read_positive_int_env(
+    "YOUTUBE_RESULT_MAX_CONCURRENT_SENDS",
+    4,
+)
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 LOG_FILE = Path(__file__).with_name("bot_error.log")
 SUPPORTED_UPLOAD_SUFFIXES = {".ogg", ".opus", ".mp3", ".m4a", ".wav", ".webm"}
@@ -246,6 +263,12 @@ class UploadSession:
     received_chunks: set[int] = field(default_factory=set)
 
 
+@dataclass(frozen=True)
+class YouTubeTranscriptResult:
+    title: str
+    transcript: str
+
+
 upload_sessions: dict[str, UploadSession] = {}
 media_platform: Optional[MediaPlatform] = None
 youtube_download_service: Optional[YouTubeDownloadService] = None
@@ -253,6 +276,14 @@ chat_transcription_modes: dict[int, str] = {}
 youtube_active_jobs_by_chat: dict[int, int] = {}
 youtube_download_waiting_chats: set[int] = set()
 youtube_download_active_chats: set[int] = set()
+youtube_metadata_cache: dict[str, tuple[float, dict]] = {}
+youtube_metadata_tasks: dict[str, asyncio.Task] = {}
+youtube_transcript_cache: dict[str, tuple[float, YouTubeTranscriptResult]] = {}
+youtube_transcript_tasks: dict[str, asyncio.Task] = {}
+youtube_transcript_build_semaphore = asyncio.Semaphore(
+    YOUTUBE_TRANSCRIPT_MAX_CONCURRENT_BUILDS
+)
+youtube_result_send_semaphore = asyncio.Semaphore(YOUTUBE_RESULT_MAX_CONCURRENT_SENDS)
 
 
 # ============================================================
@@ -1991,7 +2022,12 @@ async def start_upload_server(bot: Bot) -> web.AppRunner:
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, UPLOAD_HOST, UPLOAD_PORT)
+    site = web.TCPSite(
+        runner,
+        UPLOAD_HOST,
+        UPLOAD_PORT,
+        backlog=HTTP_LISTEN_BACKLOG,
+    )
     await site.start()
     logging.info("Upload server started on http://%s:%s", UPLOAD_HOST, UPLOAD_PORT)
     logging.info("Public upload base URL: %s", get_public_upload_base_url())
@@ -2546,6 +2582,25 @@ def extract_youtube_url(text: str) -> str:
     return match.group(0).rstrip(").,;!?]")
 
 
+def youtube_video_cache_key(url: str) -> str:
+    """Normalize watch, short, live, and shared URLs for request coalescing."""
+    normalized = extract_youtube_url(url) or url.strip()
+    parsed = urlparse(normalized)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    path_parts = [part for part in parsed.path.split("/") if part]
+    video_id = ""
+    if host in {"youtu.be", "www.youtu.be", "m.youtu.be"} and path_parts:
+        video_id = path_parts[0]
+    elif host.endswith("youtube.com"):
+        if path_parts and path_parts[0] in {"shorts", "live", "embed"}:
+            if len(path_parts) > 1:
+                video_id = path_parts[1]
+        else:
+            video_id = (parse_qs(parsed.query).get("v") or [""])[0]
+    video_id = re.sub(r"[^A-Za-z0-9_-]", "", video_id)
+    return f"youtube:{video_id}" if video_id else normalized
+
+
 def should_handle_youtube_text(text: str) -> bool:
     """
     Return whether a text message should be handled as a YouTube transcription.
@@ -2844,6 +2899,48 @@ async def read_youtube_metadata(url: str) -> dict:
     return metadata
 
 
+def _prune_timed_cache(cache: dict, max_entries: int = 512) -> None:
+    now = time.time()
+    expired = [key for key, value in cache.items() if value[0] <= now]
+    for key in expired:
+        cache.pop(key, None)
+    if len(cache) <= max_entries:
+        return
+    oldest = sorted(cache, key=lambda key: cache[key][0])[: len(cache) - max_entries]
+    for key in oldest:
+        cache.pop(key, None)
+
+
+async def read_youtube_metadata_cached(url: str) -> dict:
+    """Share one yt-dlp metadata request among concurrent users of one video."""
+    key = youtube_video_cache_key(url)
+    _prune_timed_cache(youtube_metadata_cache)
+    cached = youtube_metadata_cache.get(key)
+    if cached is not None and cached[0] > time.time():
+        return dict(cached[1])
+
+    task = youtube_metadata_tasks.get(key)
+    if task is None:
+        task = asyncio.create_task(read_youtube_metadata(url))
+        youtube_metadata_tasks[key] = task
+
+        def finish(completed: asyncio.Task, cache_key: str = key) -> None:
+            if youtube_metadata_tasks.get(cache_key) is completed:
+                youtube_metadata_tasks.pop(cache_key, None)
+            if completed.cancelled() or completed.exception() is not None:
+                return
+            metadata = completed.result()
+            youtube_metadata_cache[cache_key] = (
+                time.time() + YOUTUBE_METADATA_CACHE_TTL_SECONDS,
+                dict(metadata),
+            )
+            _prune_timed_cache(youtube_metadata_cache)
+
+        task.add_done_callback(finish)
+
+    return dict(await asyncio.shield(task))
+
+
 async def download_youtube_audio(
     url: str,
     destination_dir: Path,
@@ -2853,7 +2950,7 @@ async def download_youtube_audio(
     Download only the audio track from a single YouTube video.
     """
     destination_dir.mkdir(parents=True, exist_ok=True)
-    metadata = metadata or await read_youtube_metadata(url)
+    metadata = metadata or await read_youtube_metadata_cached(url)
     await run_subprocess(
         build_youtube_download_command(url, destination_dir),
         timeout_seconds=YOUTUBE_DOWNLOAD_TIMEOUT_SECONDS,
@@ -3446,14 +3543,125 @@ def decrement_youtube_active_jobs(chat_id: int) -> None:
     youtube_active_jobs_by_chat[chat_id] = current - 1
 
 
+async def build_youtube_transcription_result(url: str) -> YouTubeTranscriptResult:
+    """Perform the expensive YouTube/caption/STT work once per unique video."""
+    temp_dir: Optional[Path] = None
+    prepared_audio_path: Optional[Path] = None
+    async with youtube_transcript_build_semaphore:
+        try:
+            temp_dir = create_temp_directory(prefix="youtube_transcript_")
+            metadata = await read_youtube_metadata_cached(url)
+            title = str(metadata.get("title") or "YouTube-видео")[:120]
+
+            try:
+                segments = await download_youtube_captions(url, temp_dir, metadata)
+            except RuntimeError as caption_error:
+                logging.warning(
+                    "Could not use YouTube captions, falling back to audio: %s",
+                    caption_error,
+                )
+                segments = None
+
+            if segments is None:
+                downloaded_audio_path, _ = await download_youtube_audio(
+                    url,
+                    temp_dir,
+                    metadata=metadata,
+                )
+                prepared_audio_path = await prepare_media_for_transcription(
+                    downloaded_audio_path
+                )
+                async with groq_transcription_semaphore:
+                    segments = await transcribe_audio_with_timestamps(
+                        prepared_audio_path,
+                        mode="auto",
+                    )
+
+            chapters = extract_youtube_outline(metadata)
+            if not chapters:
+                chapters = await generate_youtube_outline(
+                    segments,
+                    float(metadata.get("duration") or 0),
+                )
+            return YouTubeTranscriptResult(
+                title=title,
+                transcript=format_youtube_document(chapters, segments),
+            )
+        finally:
+            if prepared_audio_path is not None:
+                try:
+                    if prepared_audio_path.exists():
+                        prepared_audio_path.unlink()
+                except OSError:
+                    logging.warning(
+                        "Could not delete YouTube prepared audio %s",
+                        prepared_audio_path,
+                    )
+            if temp_dir is not None:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+async def get_youtube_transcription_result(
+    url: str,
+) -> tuple[YouTubeTranscriptResult, str]:
+    """Return (result, source), coalescing concurrent work and caching success."""
+    key = youtube_video_cache_key(url)
+    _prune_timed_cache(youtube_transcript_cache, max_entries=128)
+    cached = youtube_transcript_cache.get(key)
+    if cached is not None and cached[0] > time.time():
+        return cached[1], "cache"
+
+    task = youtube_transcript_tasks.get(key)
+    source = "shared" if task is not None else "new"
+    if task is None:
+        task = asyncio.create_task(build_youtube_transcription_result(url))
+        youtube_transcript_tasks[key] = task
+
+        def finish(completed: asyncio.Task, cache_key: str = key) -> None:
+            if youtube_transcript_tasks.get(cache_key) is completed:
+                youtube_transcript_tasks.pop(cache_key, None)
+            if completed.cancelled() or completed.exception() is not None:
+                return
+            result = completed.result()
+            youtube_transcript_cache[cache_key] = (
+                time.time() + YOUTUBE_TRANSCRIPT_CACHE_TTL_SECONDS,
+                result,
+            )
+            _prune_timed_cache(youtube_transcript_cache, max_entries=128)
+
+        task.add_done_callback(finish)
+
+    return await asyncio.shield(task), source
+
+
+async def send_youtube_transcription_file_reliably(
+    bot: Bot,
+    chat_id: int,
+    result: YouTubeTranscriptResult,
+) -> None:
+    """Bound Telegram upload concurrency and retry transient delivery failures."""
+    async with youtube_result_send_semaphore:
+        for attempt in range(1, 4):
+            try:
+                await send_youtube_transcription_file(
+                    bot,
+                    chat_id,
+                    result.transcript,
+                    result.title,
+                )
+                return
+            except Exception:
+                if attempt >= 3:
+                    raise
+                await asyncio.sleep(attempt)
+
+
 async def process_youtube_url(bot: Bot, chat_id: int, url: str, status_message: Message) -> None:
     """
     Prefer YouTube captions, otherwise transcribe downloaded audio with Whisper
     timestamps. The result is always delivered as a TXT document.
     """
     started_at = time.monotonic()
-    temp_dir: Optional[Path] = None
-    prepared_audio_path: Optional[Path] = None
     try:
         await safe_edit_message(
             status_message,
@@ -3465,102 +3673,23 @@ async def process_youtube_url(bot: Bot, chat_id: int, url: str, status_message: 
                 int(time.monotonic() - started_at),
             ),
         )
-
-        temp_dir = create_temp_directory(prefix="youtube_transcript_")
-        metadata = await read_youtube_metadata(url)
-        title = str(metadata.get("title") or "YouTube-видео")[:120]
-
+        cache_key = youtube_video_cache_key(url)
+        already_running = cache_key in youtube_transcript_tasks
         await safe_edit_message(
             status_message,
             render_processing_status(
                 "🎬 Расшифровка YouTube",
-                25,
-                "Ищу готовые субтитры",
-                "Так результат получится быстрее и точнее.",
+                35 if already_running else 25,
+                "Видео уже в работе" if already_running else "Ищу субтитры и главы",
+                (
+                    "Ожидаю общий готовый результат — повторная обработка не запускается."
+                    if already_running
+                    else "Одинаковые запросы объединяются, чтобы результат пришёл быстрее."
+                ),
                 int(time.monotonic() - started_at),
             ),
         )
-
-        try:
-            segments = await download_youtube_captions(url, temp_dir, metadata)
-        except RuntimeError as caption_error:
-            logging.warning("Could not use YouTube captions, falling back to audio: %s", caption_error)
-            segments = None
-        if segments is not None:
-            await safe_edit_message(
-                status_message,
-                render_processing_status(
-                    "🎬 Расшифровка YouTube",
-                    85,
-                    "Субтитры получены",
-                    "Собираю аккуратный TXT-файл.",
-                    int(time.monotonic() - started_at),
-                ),
-            )
-        else:
-            await safe_edit_message(
-                status_message,
-                render_processing_status(
-                    "🎬 Расшифровка YouTube",
-                    35,
-                    "Готовых субтитров нет",
-                    "Распознаю речь по аудиодорожке — это займёт немного больше времени.",
-                    int(time.monotonic() - started_at),
-                ),
-            )
-            downloaded_audio_path, _ = await download_youtube_audio(url, temp_dir, metadata=metadata)
-            prepared_audio_path = await prepare_media_for_transcription(downloaded_audio_path)
-
-            if groq_transcription_semaphore.locked():
-                await safe_edit_message(
-                    status_message,
-                    render_processing_status(
-                        "🎬 Расшифровка YouTube",
-                        50,
-                        "Аудио в очереди",
-                        "Жду завершения предыдущего распознавания.",
-                        int(time.monotonic() - started_at),
-                    ),
-                )
-
-            async with groq_transcription_semaphore:
-                async def update_chunk_progress(index: int, total: int) -> None:
-                    percent = 55 + round(index / total * 35)
-                    await safe_edit_message(
-                        status_message,
-                        render_processing_status(
-                            "🎬 Расшифровка YouTube",
-                            percent,
-                            "Распознаю речь",
-                            f"Фрагмент {index} из {total}.",
-                            int(time.monotonic() - started_at),
-                        ),
-                    )
-
-                segments = await transcribe_audio_with_timestamps(
-                    prepared_audio_path,
-                    mode="auto",
-                    progress_callback=update_chunk_progress,
-                )
-
-        chapters = extract_youtube_outline(metadata)
-        if not chapters:
-            await safe_edit_message(
-                status_message,
-                render_processing_status(
-                    "🎬 Расшифровка YouTube",
-                    92,
-                    "Создаю содержание",
-                    "Выделяю основные темы по всей расшифровке.",
-                    int(time.monotonic() - started_at),
-                ),
-            )
-            chapters = await generate_youtube_outline(
-                segments,
-                float(metadata.get("duration") or 0),
-            )
-
-        transcript = format_youtube_document(chapters, segments)
+        result, source = await get_youtube_transcription_result(url)
 
         elapsed_seconds = int(time.monotonic() - started_at)
         await safe_edit_message(
@@ -3569,11 +3698,15 @@ async def process_youtube_url(bot: Bot, chat_id: int, url: str, status_message: 
                 "✅ Расшифровка готова",
                 100,
                 "Файл подготовлен",
-                "Отправляю TXT с содержанием и полной расшифровкой.",
+                (
+                    "Взял готовый результат из кэша и отправляю TXT."
+                    if source == "cache"
+                    else "Отправляю TXT с содержанием и полной расшифровкой."
+                ),
                 elapsed_seconds,
             ),
         )
-        await send_youtube_transcription_file(bot, chat_id, transcript, title)
+        await send_youtube_transcription_file_reliably(bot, chat_id, result)
         logging.info("Sent YouTube transcription to chat_id=%s url=%s", chat_id, url)
 
     except ValueError as exc:
@@ -3603,14 +3736,6 @@ async def process_youtube_url(bot: Bot, chat_id: int, url: str, status_message: 
         )
     finally:
         decrement_youtube_active_jobs(chat_id)
-        if prepared_audio_path is not None:
-            try:
-                if prepared_audio_path.exists():
-                    prepared_audio_path.unlink()
-            except OSError:
-                logging.warning("Could not delete YouTube prepared audio %s", prepared_audio_path)
-        if temp_dir is not None:
-            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def describe_processing_error(exc: Exception) -> str:
@@ -4032,7 +4157,7 @@ async def prepare_youtube_download_request(message: Message, url: str) -> None:
         )
     )
     try:
-        metadata = await read_youtube_metadata(url)
+        metadata = await read_youtube_metadata_cached(url)
         request = youtube_download_service.create_request(message.chat.id, url, metadata)
         quality_names = [
             "аудио" if quality == QUALITY_AUDIO else f"{quality}p"
