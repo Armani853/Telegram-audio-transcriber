@@ -942,11 +942,7 @@ def build_upload_keyboard(upload_url: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=(
-                        "📤 Загрузить длинное аудио"
-                        if is_public_https_url(upload_url)
-                        else "🏠 Загрузить в домашней сети"
-                    ),
+                    text="📤 Загрузить большой файл",
                     url=upload_url,
                 )
             ]
@@ -1055,11 +1051,7 @@ def build_main_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     buttons.append(
         [
             InlineKeyboardButton(
-                text=(
-                    "📤 Загрузить большой файл"
-                    if is_public_https_url(get_public_upload_base_url())
-                    else "🏠 Большой файл · домашняя сеть"
-                ),
+                text="📤 Загрузить большой файл",
                 url=build_upload_url(upload_id),
             )
         ]
@@ -1110,22 +1102,13 @@ def create_upload_prompt(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """
     upload_id = create_upload_session(chat_id)
     upload_url = build_upload_url(upload_id)
-    if is_public_https_url(upload_url):
-        text = (
-            "Файл больше 20 МБ, поэтому обычный Telegram Bot API не позволяет мне "
-            "скачать его автоматически.\n\n"
-            "Нажми кнопку ниже и выбери аудио или видео. Загрузка идёт частями, "
-            "повторяется после сетевых ошибок и может продолжиться после обрыва. "
-            "Готовую расшифровку я пришлю сюда."
-        )
-    else:
-        text = (
-            "⚠️ Внешняя загрузка больших файлов пока не подключена.\n\n"
-            "Кнопка ниже открывается только на устройствах в той же домашней сети, "
-            "что и бот. Через мобильный интернет адрес 192.168.x.x недоступен.\n\n"
-            "Временный вариант: отправь файл до 20 МБ прямо в Telegram. Для больших "
-            "файлов нужен публичный HTTPS-домен или облачное хранилище."
-        )
+    text = (
+        "Файл больше 20 МБ, поэтому обычный Telegram Bot API не позволяет мне "
+        "скачать его автоматически.\n\n"
+        "Нажми кнопку ниже и выбери аудио или видео. Загрузка идёт частями, "
+        "повторяется после сетевых ошибок и может продолжиться после обрыва. "
+        "Готовую расшифровку я пришлю сюда."
+    )
     return text, build_upload_keyboard(upload_url)
 
 
@@ -4314,16 +4297,11 @@ def youtube_download_result_keyboard(
     service: YouTubeDownloadService,
     record: YouTubeDownloadRecord,
 ) -> InlineKeyboardMarkup:
-    public_link = is_public_https_url(service.config.public_base_url)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=(
-                        "⬇️ Скачать готовый файл"
-                        if public_link
-                        else "🏠 Скачать в домашней сети"
-                    ),
+                    text="⬇️ Скачать готовый файл",
                     url=service.landing_url(record),
                 )
             ]
@@ -4347,10 +4325,7 @@ def render_youtube_download_ready_text(
     elif public_link:
         delivery_text = "🌐 Ссылка доступна через интернет с телефона, планшета и компьютера.\n\n"
     else:
-        delivery_text = (
-            "⚠️ Внешнее файловое хранилище пока не подключено. Ссылка ниже работает "
-            "только в домашней сети; через мобильный интернет она не откроется.\n\n"
-        )
+        delivery_text = "🔗 Готовый файл доступен по кнопке ниже.\n\n"
     return (
         "✅ <b>Видео готово</b>\n\n"
         f"🎬 {escape(record.title)}\n"

@@ -228,7 +228,7 @@ class YouTubeDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(telegram.documents[0]["chat_id"], 42)
         self.assertIn("максимальной совместимости", telegram.documents[0]["caption"])
 
-    async def test_private_link_is_clearly_labeled_as_home_network_only(self):
+    async def test_private_link_uses_neutral_download_label(self):
         self.service.config = replace(
             self.service.config,
             public_base_url="http://192.168.1.72:8080",
@@ -242,10 +242,11 @@ class YouTubeDeliveryTests(unittest.IsolatedAsyncioTestCase):
         )
         keyboard = bot_module.youtube_download_result_keyboard(self.service, self.record)
 
-        self.assertIn("только в домашней сети", text)
+        self.assertNotIn("домашн", text.lower())
+        self.assertIn("Готовый файл доступен", text)
         self.assertEqual(
             keyboard.inline_keyboard[0][0].text,
-            "🏠 Скачать в домашней сети",
+            "⬇️ Скачать готовый файл",
         )
 
     def test_public_https_detection_rejects_private_and_local_addresses(self):

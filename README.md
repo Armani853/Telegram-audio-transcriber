@@ -352,7 +352,7 @@ HTTP_LISTEN_BACKLOG=2048
 - Срок хранения по умолчанию — 72 часа. Каждое открытие ссылки или продолжение загрузки снова продлевает его на полный срок.
 - Если конкретное качество не удалось подготовить, бот оставляет кнопки повторной попытки, меньшего качества и «Только аудио».
 - Полностью передать новый файл на устройство без какого-либо интернет-соединения физически невозможно. Сервер закончит и сохранит работу офлайн от клиента; устройство получит сообщение и сможет продолжить скачивание после восстановления сети.
-- Для доступа не только из домашней LAN значение `PUBLIC_UPLOAD_BASE_URL` обязано быть публичным HTTPS-адресом. Для тысяч пользователей файлы следует вынести в S3-совместимое хранилище/CDN с поддержкой Range, а бот оставить управляющим сервисом.
+- Для доступа за пределами локальной LAN значение `PUBLIC_UPLOAD_BASE_URL` обязано быть публичным HTTPS-адресом. Для тысяч пользователей файлы следует вынести в S3-совместимое хранилище/CDN с поддержкой Range, а бот оставить управляющим сервисом.
 
 For production, `PUBLIC_UPLOAD_BASE_URL` must be a public HTTPS address pointing
 to the embedded HTTP service. Download only media that the user owns or is
@@ -374,9 +374,8 @@ private LAN address globally reachable.
 Small YouTube results under `YOUTUBE_TELEGRAM_DIRECT_LIMIT_BYTES` are sent
 directly through Telegram and therefore work globally without the HTTP file
 server. The bot first attempts a streamable Telegram video and automatically
-retries as a document when Telegram does not accept the video's codec. Private
-download URLs are explicitly labelled `🏠 Скачать в домашней сети` and the
-message explains that cellular users cannot open them.
+retries as a document when Telegram does not accept the video's codec. All
+download actions use the same neutral `⬇️ Скачать готовый файл` label.
 
 For large files, configure a stable public hostname. With a Cloudflare named
 tunnel, publish `https://files.example.com` to `http://127.0.0.1:8080`, keep
