@@ -4,6 +4,11 @@ __pycache__/
 .venv/
 *.log
 bot.log
-bot_error.log
+bot_error.log*
 bot_stdout.log
 *.ogg
+storage/
+data/
+*.sqlite3
+*.sqlite3-*
+/tmp*/
