@@ -132,9 +132,10 @@ class ModeNormalizationTests(unittest.TestCase):
         finally:
             bot.chat_transcription_modes.pop(123, None)
 
-        buttons = keyboard.inline_keyboard[0]
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
         labels = [button.text for button in buttons]
         callbacks = [button.callback_data for button in buttons]
+        self.assertEqual([len(row) for row in keyboard.inline_keyboard], [2, 2, 1])
         self.assertEqual(labels, ["Русский", "English", "Español", "✓ Armenian", "Auto"])
         self.assertEqual(
             callbacks,

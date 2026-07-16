@@ -951,10 +951,14 @@ def build_transcription_mode_keyboard(chat_id: int) -> InlineKeyboardMarkup:
             [
                 button("ru", "Русский"),
                 button("en", "English"),
+            ],
+            [
                 button("es", "Español"),
                 button("hy", "Armenian"),
+            ],
+            [
                 button("auto", "Auto"),
-            ]
+            ],
         ]
     )
 
