@@ -46,6 +46,8 @@ from media_platform import (
 )
 from youtube_downloader import (
     QUALITY_AUDIO,
+    YouTubeDownloadNotification,
+    YouTubeDownloadRecord,
     YouTubeDownloadRequest,
     YouTubeDownloadService,
     format_duration as format_download_duration,
@@ -787,7 +789,7 @@ async def safe_edit_message(
     text: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     parse_mode: Optional[str] = None,
-) -> None:
+) -> bool:
     """
     Best-effort status update. Telegram can reject edits for old/deleted messages.
     """
@@ -798,8 +800,10 @@ async def safe_edit_message(
         if parse_mode is not None:
             kwargs["parse_mode"] = parse_mode
         await message.edit_text(text, **kwargs)
+        return True
     except Exception as exc:
         logging.warning("Could not edit status message: %s", exc)
+        return False
 
 
 async def safe_delete_message(message: Message) -> None:
@@ -1958,6 +1962,28 @@ async def start_upload_server(bot: Bot) -> web.AppRunner:
     app.router.add_post("/upload/{upload_id}/complete", upload_complete_handler)
     register_media_platform_routes(app, media_platform)
     register_youtube_download_routes(app, youtube_download_service)
+
+    notification_task: Optional[asyncio.Task] = None
+
+    async def start_notification_delivery(_: web.Application) -> None:
+        nonlocal notification_task
+        notification_task = asyncio.create_task(
+            youtube_download_notification_loop(bot, youtube_download_service)
+        )
+
+    async def stop_notification_delivery(_: web.Application) -> None:
+        if notification_task is None:
+            return
+        notification_task.cancel()
+        try:
+            await notification_task
+        except asyncio.CancelledError:
+            pass
+
+    # The service startup is already registered above. Start delivery after it,
+    # and stop delivery before closing the service/database.
+    app.on_startup.append(start_notification_delivery)
+    app.on_cleanup.insert(0, stop_notification_delivery)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -4034,6 +4060,97 @@ async def prepare_youtube_download_request(message: Message, url: str) -> None:
         )
 
 
+def youtube_download_result_keyboard(
+    service: YouTubeDownloadService,
+    record: YouTubeDownloadRecord,
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬇️ Скачать готовый файл",
+                    url=service.landing_url(record),
+                )
+            ]
+        ]
+    )
+
+
+def render_youtube_download_ready_text(
+    service: YouTubeDownloadService,
+    record: YouTubeDownloadRecord,
+    preparation_seconds: float,
+    was_cached: bool,
+) -> str:
+    quality_text = "MP3" if record.quality == QUALITY_AUDIO else f"{record.height}p MP4"
+    cache_text = "Файл уже был в кэше." if was_cached else "Файл скачан и проверен."
+    ttl_hours = max(1, (service.config.ttl_seconds + 3599) // 3600)
+    return (
+        "✅ <b>Видео готово</b>\n\n"
+        f"🎬 {escape(record.title)}\n"
+        f"🎞 Качество: {quality_text}\n"
+        f"📦 Размер: {format_file_size(record.file_size)}\n"
+        f"⏱ Подготовка: {preparation_seconds:.1f} сек.\n"
+        f"⚡ {cache_text}\n\n"
+        f"Файл хранится {ttl_hours} ч. Каждое открытие или продолжение скачивания "
+        "продлевает этот срок."
+    )
+
+
+async def deliver_one_youtube_notification(
+    bot: Bot,
+    service: YouTubeDownloadService,
+    notification: YouTubeDownloadNotification,
+) -> bool:
+    record = await service.get_by_token(notification.token)
+    if record is None:
+        await service.mark_notification_delivered(notification.notification_id)
+        return False
+    try:
+        await bot.send_message(
+            chat_id=notification.chat_id,
+            text=notification.text,
+            reply_markup=youtube_download_result_keyboard(service, record),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logging.warning(
+            "Could not deliver persisted YouTube result notification id=%s: %s",
+            notification.notification_id,
+            exc,
+        )
+        await service.reschedule_notification(notification)
+        return False
+    await service.mark_notification_delivered(notification.notification_id)
+    return True
+
+
+async def deliver_pending_youtube_notifications(
+    bot: Bot,
+    service: YouTubeDownloadService,
+    limit: int = 20,
+) -> int:
+    delivered = 0
+    for notification in await service.pending_notifications(limit):
+        if await deliver_one_youtube_notification(bot, service, notification):
+            delivered += 1
+    return delivered
+
+
+async def youtube_download_notification_loop(
+    bot: Bot,
+    service: YouTubeDownloadService,
+) -> None:
+    while True:
+        try:
+            await deliver_pending_youtube_notifications(bot, service)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.exception("YouTube result delivery loop failed: %s", exc)
+        await asyncio.sleep(15)
+
+
 async def process_youtube_download_selection(
     bot: Bot,
     chat_id: int,
@@ -4064,31 +4181,33 @@ async def process_youtube_download_selection(
         )
         elapsed_seconds = int(time.monotonic() - started_at)
         quality_text = "MP3" if quality == QUALITY_AUDIO else f"{record.height}p MP4"
-        cache_text = "Файл уже был в кэше." if was_cached else "Файл скачан и проверен."
-        result_keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="⬇️ Скачать готовый файл",
-                        url=youtube_download_service.landing_url(record),
-                    )
-                ]
-            ]
+        ready_text = render_youtube_download_ready_text(
+            youtube_download_service,
+            record,
+            preparation_seconds,
+            was_cached,
         )
-        await safe_edit_message(
+        notification = await youtube_download_service.queue_notification(
+            chat_id,
+            record.token,
+            ready_text,
+        )
+        edited = await safe_edit_message(
             status_message,
-            (
-                "✅ <b>Видео готово</b>\n\n"
-                f"🎬 {escape(record.title)}\n"
-                f"🎞 Качество: {quality_text}\n"
-                f"📦 Размер: {format_file_size(record.file_size)}\n"
-                f"⏱ Подготовка: {preparation_seconds:.1f} сек.\n"
-                f"⚡ {cache_text}\n\n"
-                "Файл хранится 24 часа, затем удаляется автоматически."
-            ),
-            reply_markup=result_keyboard,
+            ready_text,
+            reply_markup=youtube_download_result_keyboard(youtube_download_service, record),
             parse_mode="HTML",
         )
+        if edited:
+            await youtube_download_service.mark_notification_delivered(
+                notification.notification_id
+            )
+        else:
+            await deliver_one_youtube_notification(
+                bot,
+                youtube_download_service,
+                notification,
+            )
 
         if record.file_size <= youtube_download_service.config.telegram_direct_limit_bytes:
             try:
@@ -4124,13 +4243,17 @@ async def process_youtube_download_selection(
         logging.exception("Failed to download YouTube video: %s", exc)
         await safe_edit_message(
             status_message,
-            render_processing_status(
-                "⚠️ Не удалось скачать видео",
-                100,
-                "Файл не подготовлен",
-                describe_processing_error(exc),
-                int(time.monotonic() - started_at),
+            (
+                f"{render_processing_status(
+                    '⚠️ Не удалось скачать видео',
+                    100,
+                    'Файл не подготовлен',
+                    describe_processing_error(exc),
+                    int(time.monotonic() - started_at),
+                )}\n\n"
+                "Попробуй ещё раз или выбери меньший размер / только аудио:"
             ),
+            reply_markup=build_youtube_download_quality_keyboard(request),
         )
     finally:
         youtube_download_active_chats.discard(chat_id)

@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import escape
 import json
 import logging
@@ -67,6 +67,16 @@ class YouTubeDownloadRecord:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class YouTubeDownloadNotification:
+    notification_id: int
+    chat_id: int
+    token: str
+    text: str
+    attempts: int
+    next_attempt_at: float
+
+
 def youtube_download_config_from_env(
     public_base_url: str,
     default_data_dir: Path,
@@ -86,7 +96,7 @@ def youtube_download_config_from_env(
                 str(default_data_dir / "youtube_downloads.sqlite3"),
             )
         ).expanduser(),
-        ttl_seconds=max(3600, int(os.getenv("YOUTUBE_DOWNLOAD_TTL_SECONDS", "86400"))),
+        ttl_seconds=max(3600, int(os.getenv("YOUTUBE_DOWNLOAD_TTL_SECONDS", "259200"))),
         request_ttl_seconds=max(
             300,
             int(os.getenv("YOUTUBE_DOWNLOAD_REQUEST_TTL_SECONDS", "1800")),
@@ -290,6 +300,27 @@ class YouTubeDownloadService:
         self.connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_youtube_download_expiry ON youtube_downloads(expires_at)"
         )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS youtube_download_notifications (
+                notification_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                token TEXT NOT NULL,
+                text TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at REAL NOT NULL,
+                delivered_at REAL,
+                created_at REAL NOT NULL,
+                UNIQUE(chat_id, token)
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_youtube_notification_pending
+            ON youtube_download_notifications(delivered_at, next_attempt_at)
+            """
+        )
         self.connection.commit()
 
     async def start(self) -> None:
@@ -392,7 +423,7 @@ class YouTubeDownloadService:
         if record.expires_at <= time.time() or not record.file_path.is_file():
             await self._delete_record(record)
             return None
-        return record
+        return await self.touch_record(record)
 
     async def get_by_token(self, token: str) -> Optional[YouTubeDownloadRecord]:
         row = await self._fetchone(
@@ -405,7 +436,103 @@ class YouTubeDownloadService:
         if record.expires_at <= time.time() or not record.file_path.is_file():
             await self._delete_record(record)
             return None
-        return record
+        return await self.touch_record(record)
+
+    async def touch_record(self, record: YouTubeDownloadRecord) -> YouTubeDownloadRecord:
+        """Keep an actively opened or resumed download alive for another full TTL."""
+        new_expiry = max(record.expires_at, time.time() + self.config.ttl_seconds)
+        if new_expiry <= record.expires_at:
+            return record
+        await self._execute(
+            "UPDATE youtube_downloads SET expires_at = ? WHERE cache_key = ?",
+            (new_expiry, record.cache_key),
+        )
+        return replace(record, expires_at=new_expiry)
+
+    def _notification_from_row(self, row: sqlite3.Row) -> YouTubeDownloadNotification:
+        return YouTubeDownloadNotification(
+            notification_id=int(row["notification_id"]),
+            chat_id=int(row["chat_id"]),
+            token=str(row["token"]),
+            text=str(row["text"]),
+            attempts=int(row["attempts"]),
+            next_attempt_at=float(row["next_attempt_at"]),
+        )
+
+    async def queue_notification(
+        self,
+        chat_id: int,
+        token: str,
+        text: str,
+    ) -> YouTubeDownloadNotification:
+        """Persist delivery before contacting Telegram so a result cannot be lost."""
+        now = time.time()
+        first_retry_at = now + 15
+        await self._execute(
+            """
+            INSERT INTO youtube_download_notifications(
+                chat_id, token, text, attempts, next_attempt_at, delivered_at, created_at
+            ) VALUES(?, ?, ?, 0, ?, NULL, ?)
+            ON CONFLICT(chat_id, token) DO UPDATE SET
+                text = excluded.text,
+                attempts = 0,
+                next_attempt_at = excluded.next_attempt_at,
+                delivered_at = NULL
+            """,
+            (chat_id, token, text, first_retry_at, now),
+        )
+        row = await self._fetchone(
+            """
+            SELECT * FROM youtube_download_notifications
+            WHERE chat_id = ? AND token = ?
+            """,
+            (chat_id, token),
+        )
+        if row is None:
+            raise RuntimeError("Could not persist YouTube result notification.")
+        return self._notification_from_row(row)
+
+    async def pending_notifications(
+        self,
+        limit: int = 20,
+    ) -> list[YouTubeDownloadNotification]:
+        now = time.time()
+        async with self._db_lock:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM youtube_download_notifications
+                WHERE delivered_at IS NULL AND next_attempt_at <= ?
+                ORDER BY next_attempt_at, notification_id
+                LIMIT ?
+                """,
+                (now, max(1, limit)),
+            ).fetchall()
+        return [self._notification_from_row(row) for row in rows]
+
+    async def mark_notification_delivered(self, notification_id: int) -> None:
+        await self._execute(
+            """
+            UPDATE youtube_download_notifications
+            SET delivered_at = ?
+            WHERE notification_id = ?
+            """,
+            (time.time(), notification_id),
+        )
+
+    async def reschedule_notification(
+        self,
+        notification: YouTubeDownloadNotification,
+    ) -> None:
+        attempts = notification.attempts + 1
+        delay_seconds = min(3600, 15 * (2 ** min(attempts - 1, 8)))
+        await self._execute(
+            """
+            UPDATE youtube_download_notifications
+            SET attempts = ?, next_attempt_at = ?
+            WHERE notification_id = ? AND delivered_at IS NULL
+            """,
+            (attempts, time.time() + delay_seconds, notification.notification_id),
+        )
 
     async def _delete_record(self, record: YouTubeDownloadRecord) -> None:
         try:
@@ -416,6 +543,10 @@ class YouTubeDownloadService:
         await self._execute(
             "DELETE FROM youtube_downloads WHERE cache_key = ?",
             (record.cache_key,),
+        )
+        await self._execute(
+            "DELETE FROM youtube_download_notifications WHERE token = ?",
+            (record.token,),
         )
 
     async def cleanup_expired(self) -> None:
@@ -623,7 +754,7 @@ h1{{font-size:25px;line-height:1.25;margin:18px 0 10px;overflow-wrap:anywhere}} 
 <span class="ok">✓ Файл готов</span><h1>{escape(record.title)}</h1>
 <div class="meta">Качество: <b>{escape(quality)}</b><br>Размер: <b>{escape(format_file_size(record.file_size))}</b><br>Длительность: <b>{escape(format_duration(record.duration))}</b></div>
 <a class="button" href="{escape(file_url)}">⬇️ Скачать готовый файл</a>
-<div class="note">Ссылка действует ещё примерно {hours} ч {minutes} мин. После этого файл будет автоматически удалён.</div>
+<div class="note">Ссылка действует ещё примерно {hours} ч {minutes} мин. Открытие и повторная докачка продлевают срок. Если интернет оборвался, снова открой эту страницу и продолжи загрузку — сервер поддерживает докачку по частям.</div>
 </section></main></body></html>"""
     return web.Response(
         text=body,

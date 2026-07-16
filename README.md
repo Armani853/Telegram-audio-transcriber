@@ -318,7 +318,7 @@ repeat request is returned immediately. Expired files and database records are
 deleted automatically.
 
 ```env
-YOUTUBE_DOWNLOAD_TTL_SECONDS=86400
+YOUTUBE_DOWNLOAD_TTL_SECONDS=259200
 YOUTUBE_DOWNLOAD_REQUEST_TTL_SECONDS=1800
 YOUTUBE_DOWNLOAD_TIMEOUT_SECONDS=21600
 YOUTUBE_DOWNLOAD_CONCURRENT_FRAGMENTS=8
@@ -327,6 +327,16 @@ YOUTUBE_TELEGRAM_DIRECT_LIMIT_BYTES=51380224
 # YOUTUBE_DOWNLOAD_STORAGE_DIR=/persistent/youtube_downloads
 # YOUTUBE_DOWNLOAD_DB_PATH=/persistent/youtube_downloads.sqlite3
 ```
+
+### Слабый интернет и обрыв связи
+
+- Скачивание с YouTube выполняется на сервере и не зависит от того, открыт ли Telegram на телефоне.
+- Готовый результат сначала сохраняется в SQLite, затем доставляется в Telegram. При временном сбое Telegram отправка повторяется автоматически и переживает перезапуск процесса бота.
+- Файловый HTTP-сервер поддерживает `Range`/`206 Partial Content`, поэтому браузер или менеджер загрузок может продолжить большой файл с уже полученного байта.
+- Срок хранения по умолчанию — 72 часа. Каждое открытие ссылки или продолжение загрузки снова продлевает его на полный срок.
+- Если конкретное качество не удалось подготовить, бот оставляет кнопки повторной попытки, меньшего качества и «Только аудио».
+- Полностью передать новый файл на устройство без какого-либо интернет-соединения физически невозможно. Сервер закончит и сохранит работу офлайн от клиента; устройство получит сообщение и сможет продолжить скачивание после восстановления сети.
+- Для доступа не только из домашней LAN значение `PUBLIC_UPLOAD_BASE_URL` обязано быть публичным HTTPS-адресом. Для тысяч пользователей файлы следует вынести в S3-совместимое хранилище/CDN с поддержкой Range, а бот оставить управляющим сервисом.
 
 For production, `PUBLIC_UPLOAD_BASE_URL` must be a public HTTPS address pointing
 to the embedded HTTP service. Download only media that the user owns or is

@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 from youtube_downloader import (
     QUALITY_AUDIO,
     YouTubeDownloadConfig,
+    YouTubeDownloadRecord,
     YouTubeDownloadService,
     build_youtube_media_download_command,
     estimated_quality_sizes,
@@ -170,3 +172,125 @@ class YouTubeDownloadServiceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(sum(1 for command in calls if command[0] == "yt-dlp"), 2)
             finally:
                 await service.stop()
+
+    async def test_opening_file_extends_sliding_expiry(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_name:
+            root = Path(temp_name)
+            media_path = root / "storage" / "video" / "360" / "token.mp4"
+            media_path.parent.mkdir(parents=True, exist_ok=True)
+            media_path.write_bytes(b"media")
+
+            async def forbidden_run(command, timeout_seconds=None):
+                raise AssertionError(f"Unexpected command: {command}")
+
+            service = YouTubeDownloadService(
+                config=YouTubeDownloadConfig(
+                    public_base_url="https://files.example.com",
+                    storage_dir=root / "storage",
+                    db_path=root / "downloads.sqlite3",
+                    ttl_seconds=3600,
+                    request_ttl_seconds=1800,
+                    timeout_seconds=3600,
+                    telegram_direct_limit_bytes=0,
+                    concurrent_fragments=4,
+                    max_concurrent_downloads=1,
+                ),
+                run_command=forbidden_run,
+                base_command=lambda: ["yt-dlp"],
+                ffprobe_binary="ffprobe",
+            )
+            old_expiry = time.time() + 30
+            record = YouTubeDownloadRecord(
+                cache_key="video:360",
+                token="sliding-token",
+                video_id="video",
+                quality="360",
+                title="Video",
+                file_name="Video [360p].mp4",
+                file_path=media_path,
+                file_size=media_path.stat().st_size,
+                width=640,
+                height=360,
+                duration=10,
+                created_at=time.time(),
+                expires_at=old_expiry,
+            )
+            await service._execute(
+                """
+                INSERT INTO youtube_downloads(
+                    cache_key, token, video_id, quality, title, file_name,
+                    file_path, file_size, width, height, duration, created_at, expires_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.cache_key,
+                    record.token,
+                    record.video_id,
+                    record.quality,
+                    record.title,
+                    record.file_name,
+                    str(record.file_path),
+                    record.file_size,
+                    record.width,
+                    record.height,
+                    record.duration,
+                    record.created_at,
+                    record.expires_at,
+                ),
+            )
+            try:
+                touched = await service.get_by_token(record.token)
+
+                self.assertIsNotNone(touched)
+                self.assertGreater(touched.expires_at, old_expiry + 3500)
+            finally:
+                await service.stop()
+
+    async def test_pending_result_notification_survives_service_restart(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_name:
+            root = Path(temp_name)
+            config = YouTubeDownloadConfig(
+                public_base_url="https://files.example.com",
+                storage_dir=root / "storage",
+                db_path=root / "downloads.sqlite3",
+                ttl_seconds=3600,
+                request_ttl_seconds=1800,
+                timeout_seconds=3600,
+                telegram_direct_limit_bytes=0,
+                concurrent_fragments=4,
+                max_concurrent_downloads=1,
+            )
+
+            async def forbidden_run(command, timeout_seconds=None):
+                raise AssertionError(f"Unexpected command: {command}")
+
+            def make_service():
+                return YouTubeDownloadService(
+                    config=config,
+                    run_command=forbidden_run,
+                    base_command=lambda: ["yt-dlp"],
+                    ffprobe_binary="ffprobe",
+                )
+
+            first_service = make_service()
+            queued = await first_service.queue_notification(42, "token", "ready")
+            await first_service.stop()
+
+            second_service = make_service()
+            try:
+                await second_service._execute(
+                    """
+                    UPDATE youtube_download_notifications
+                    SET next_attempt_at = ?
+                    WHERE notification_id = ?
+                    """,
+                    (time.time() - 1, queued.notification_id),
+                )
+                pending = await second_service.pending_notifications()
+
+                self.assertEqual(len(pending), 1)
+                self.assertEqual(pending[0].notification_id, queued.notification_id)
+                self.assertEqual(pending[0].chat_id, 42)
+                self.assertEqual(pending[0].text, "ready")
+            finally:
+                await second_service.stop()
