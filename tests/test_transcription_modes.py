@@ -191,9 +191,9 @@ class MediaRoutingTests(unittest.TestCase):
         document = SimpleNamespace(mime_type="text/plain", file_name="notes.txt")
         self.assertFalse(bot.is_supported_audio_message(media_message(document=document)))
 
-    def test_voice_ogg_stays_direct_without_ffmpeg(self):
+    def test_voice_ogg_is_normalized_with_ffmpeg(self):
         message = media_message(voice=object())
-        self.assertFalse(bot.should_prepare_media_with_ffmpeg(message, "voice_123.ogg"))
+        self.assertTrue(bot.should_prepare_media_with_ffmpeg(message, "voice_123.ogg"))
 
     def test_common_audio_stays_direct_without_ffmpeg(self):
         message = media_message(audio=object())
@@ -755,6 +755,29 @@ class RealTextRegressionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GroqModeParameterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_async_raw_response_parser_is_awaited(self):
+        expected = FakeTranscription()
+
+        class AsyncRawResponse:
+            headers = {}
+
+            async def parse(self):
+                return expected
+
+        class RawResource:
+            async def create(self, **_kwargs):
+                return AsyncRawResponse()
+
+        client = SimpleNamespace(
+            audio=SimpleNamespace(
+                transcriptions=SimpleNamespace(with_raw_response=RawResource())
+            )
+        )
+
+        result = await bot.create_groq_transcription(client, {"model": "whisper-large-v3"})
+
+        self.assertIs(result, expected)
+
     async def transcribe_with_fake_path(self, mode):
         fake_client = FakeGroqClient()
         fake_path = SimpleNamespace(
@@ -822,6 +845,65 @@ class TranscriptionProviderTests(unittest.IsolatedAsyncioTestCase):
                 result = await bot.transcribe_with_selected_provider(Path("audio.mp3"), mode="auto")
 
         self.assertEqual(result, "openai transcript")
+
+    async def test_empty_forced_language_retries_with_auto_detection(self):
+        calls = []
+
+        async def fake_transcribe(_path, mode="ru"):
+            calls.append(mode)
+            return "recognized automatically" if mode == "auto" else ""
+
+        with patch.object(bot, "STT_PROVIDER", "groq"):
+            with patch.object(bot, "transcribe_with_selected_provider", new=fake_transcribe):
+                result = await bot.transcribe_with_empty_result_recovery(
+                    Path("voice.mp3"), mode="ru"
+                )
+
+        self.assertEqual(result, "recognized automatically")
+        self.assertEqual(calls, ["ru", "auto"])
+
+    async def test_empty_auto_result_retries_with_groq_fallback_model(self):
+        fallback_calls = []
+
+        async def fake_selected(_path, mode="ru"):
+            self.assertEqual(mode, "auto")
+            return ""
+
+        async def fake_groq(_path, mode="ru", model=None):
+            fallback_calls.append((mode, model))
+            return "recognized by turbo"
+
+        with patch.object(bot, "STT_PROVIDER", "groq"):
+            with patch.object(bot, "GROQ_WHISPER_MODEL", "whisper-large-v3"):
+                with patch.object(bot, "GROQ_WHISPER_FALLBACK_MODEL", "whisper-large-v3-turbo"):
+                    with patch.object(bot, "transcribe_with_selected_provider", new=fake_selected):
+                        with patch.object(bot, "transcribe_with_groq", new=fake_groq):
+                            result = await bot.transcribe_with_empty_result_recovery(
+                                Path("voice.mp3"), mode="auto"
+                            )
+
+        self.assertEqual(result, "recognized by turbo")
+        self.assertEqual(fallback_calls, [("auto", "whisper-large-v3-turbo")])
+
+    async def test_all_empty_attempts_raise_instead_of_reporting_ready(self):
+        async def fake_recovery(_path, mode="ru"):
+            return ""
+
+        async def no_tail(_path, mode="ru"):
+            return ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "voice.mp3"
+            audio_path.write_bytes(b"not-empty")
+            with patch.object(bot, "transcribe_with_empty_result_recovery", new=fake_recovery):
+                with patch.object(bot, "transcribe_tail_for_recovery", new=no_tail):
+                    with self.assertRaises(bot.EmptyTranscriptionError):
+                        await bot.transcribe_audio_safely(audio_path, mode="ru")
+
+    def test_empty_transcription_error_has_user_safe_explanation(self):
+        reason = bot.describe_processing_error(bot.EmptyTranscriptionError("internal details"))
+        self.assertIn("Речь не обнаружена", reason)
+        self.assertNotIn("internal details", reason)
 
 
 if __name__ == "__main__":

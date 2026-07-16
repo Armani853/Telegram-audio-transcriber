@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
 import ipaddress
+import inspect
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -113,6 +114,10 @@ HTTP_LISTEN_BACKLOG = read_positive_int_env("HTTP_LISTEN_BACKLOG", 2048)
 
 # Groq Whisper model
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3").strip() or "whisper-large-v3"
+GROQ_WHISPER_FALLBACK_MODEL = (
+    os.getenv("GROQ_WHISPER_FALLBACK_MODEL", "whisper-large-v3-turbo").strip()
+    or "whisper-large-v3-turbo"
+)
 STT_PROVIDER = os.getenv("STT_PROVIDER", "groq").strip().lower() or "groq"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL", "gpt-4o-transcribe").strip() or "gpt-4o-transcribe"
@@ -464,10 +469,11 @@ def is_supported_media_mime(mime_type: Optional[str]) -> bool:
 
 def should_prepare_media_with_ffmpeg(message: Message, file_name: str) -> bool:
     """
-    Keep the old direct path for Telegram voice/ogg-style audio. Use ffmpeg only
-    when we need to extract video audio or convert a container Groq may reject.
+    Normalize Telegram voice/video notes and containers that a speech provider
+    may interpret inconsistently. Ordinary supported audio files keep the fast
+    direct path.
     """
-    if message.video_note or message.video:
+    if message.voice or message.video_note or message.video:
         return True
 
     suffix = suffix_from_file_name(file_name)
@@ -1646,13 +1652,17 @@ async def process_uploaded_audio(bot: Bot, chat_id: int, audio_path: Path, origi
     except Exception as exc:
         logging.exception("Failed to process uploaded audio: %s", exc)
         reason = describe_processing_error(exc)
-        await bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "Не получилось распознать загруженное аудио.\n\n"
-                f"Причина: {reason}"
-            ),
+        error_text = render_processing_status(
+            "Расшифровка не выполнена",
+            100,
+            "Речь не распознана",
+            reason,
+            int(time.monotonic() - started_at),
         )
+        if status_message is not None:
+            await safe_edit_message(status_message, error_text)
+        else:
+            await bot.send_message(chat_id=chat_id, text=error_text)
     finally:
         try:
             if audio_path.exists():
@@ -2087,7 +2097,11 @@ async def download_telegram_file(bot: Bot, file_id: str, destination: Path) -> N
     await bot.download_file(telegram_file.file_path, destination)
 
 
-async def transcribe_with_groq(audio_path: Path, mode: str = "ru") -> str:
+async def transcribe_with_groq(
+    audio_path: Path,
+    mode: str = "ru",
+    model: Optional[str] = None,
+) -> str:
     """
     Send local audio file to Groq Whisper Large V3 and return transcription text.
     Russian mode intentionally matches the old behavior: language="ru" and no
@@ -2097,20 +2111,22 @@ async def transcribe_with_groq(audio_path: Path, mode: str = "ru") -> str:
 
     mime_type = mimetypes.guess_type(audio_path.name)[0] or "audio/ogg"
     mode = normalize_transcription_mode(mode)
+    selected_model = (model or GROQ_WHISPER_MODEL).strip() or GROQ_WHISPER_MODEL
     transcription_kwargs = {
         "file": None,
-        "model": GROQ_WHISPER_MODEL,
+        "model": selected_model,
         "temperature": 0,
     }
     if mode in {"ru", "en", "es"}:
         transcription_kwargs["language"] = mode
 
     logging.info(
-        "Sending audio to Groq: name=%s size=%s mime_type=%s mode=%s",
+        "Sending audio to Groq: name=%s size=%s mime_type=%s mode=%s model=%s",
         audio_path.name,
         audio_path.stat().st_size,
         mime_type,
         mode,
+        selected_model,
     )
 
     try:
@@ -2150,7 +2166,10 @@ async def create_groq_transcription(groq_client: AsyncGroq, kwargs: dict) -> obj
     }
     if quota_headers:
         logging.info("Groq STT rate limits: %s", quota_headers)
-    return raw_response.parse()
+    parsed_response = raw_response.parse()
+    if inspect.isawaitable(parsed_response):
+        return await parsed_response
+    return parsed_response
 
 
 async def transcribe_with_groq_segments(audio_path: Path, mode: str = "auto") -> list[dict]:
@@ -2332,6 +2351,44 @@ async def transcribe_with_selected_provider(audio_path: Path, mode: str = "ru") 
     if STT_PROVIDER != "groq":
         raise RuntimeError(f"Unsupported STT_PROVIDER: {STT_PROVIDER}")
     return await transcribe_with_groq(audio_path, mode=mode)
+
+
+async def transcribe_with_empty_result_recovery(audio_path: Path, mode: str = "ru") -> str:
+    """Retry a valid but empty STT response with safer recognition settings."""
+    normalized_mode = normalize_transcription_mode(mode)
+    text = (await transcribe_with_selected_provider(audio_path, mode=normalized_mode)).strip()
+    if text:
+        return text
+
+    logging.warning(
+        "Speech provider returned an empty transcript: provider=%s mode=%s path=%s",
+        STT_PROVIDER,
+        normalized_mode,
+        audio_path.name,
+    )
+
+    if normalized_mode != "auto":
+        logging.info("Retrying empty transcription with automatic language detection")
+        text = (await transcribe_with_selected_provider(audio_path, mode="auto")).strip()
+        if text:
+            return text
+
+    if STT_PROVIDER == "groq" and GROQ_WHISPER_FALLBACK_MODEL != GROQ_WHISPER_MODEL:
+        logging.info(
+            "Retrying empty transcription with Groq fallback model=%s",
+            GROQ_WHISPER_FALLBACK_MODEL,
+        )
+        text = (
+            await transcribe_with_groq(
+                audio_path,
+                mode="auto",
+                model=GROQ_WHISPER_FALLBACK_MODEL,
+            )
+        ).strip()
+        if text:
+            return text
+
+    return ""
 
 
 async def transcribe_segments_with_selected_provider(
@@ -3197,9 +3254,14 @@ async def transcribe_audio_safely(
     """
     audio_size = audio_path.stat().st_size
     if audio_size <= MAX_GROQ_CHUNK_BYTES:
-        main_text = await transcribe_with_selected_provider(audio_path, mode=mode)
+        main_text = await transcribe_with_empty_result_recovery(audio_path, mode=mode)
         tail_text = await transcribe_tail_for_recovery(audio_path, mode=mode)
-        return merge_transcription_parts([main_text, tail_text])
+        merged_text = merge_transcription_parts([main_text, tail_text])
+        if not merged_text:
+            raise EmptyTranscriptionError(
+                "Speech was not detected after automatic language and model retries."
+            )
+        return merged_text
 
     chunk_dir = create_temp_directory(prefix="tg_voice_chunks_")
     try:
@@ -3217,10 +3279,17 @@ async def transcribe_audio_safely(
                 chunk_path.name,
                 chunk_path.stat().st_size,
             )
-            transcribed_parts.append(await transcribe_with_selected_provider(chunk_path, mode=mode))
+            transcribed_parts.append(
+                await transcribe_with_empty_result_recovery(chunk_path, mode=mode)
+            )
 
         tail_text = await transcribe_tail_for_recovery(audio_path, mode=mode)
-        return merge_transcription_parts([*transcribed_parts, tail_text])
+        merged_text = merge_transcription_parts([*transcribed_parts, tail_text])
+        if not merged_text:
+            raise EmptyTranscriptionError(
+                "Speech was not detected after automatic language and model retries."
+            )
+        return merged_text
     finally:
         shutil.rmtree(chunk_dir, ignore_errors=True)
 
@@ -3780,10 +3849,20 @@ async def process_youtube_url(bot: Bot, chat_id: int, url: str, status_message: 
         decrement_youtube_active_jobs(chat_id)
 
 
+class EmptyTranscriptionError(RuntimeError):
+    """The media was valid, but all configured STT recovery attempts were empty."""
+
+
 def describe_processing_error(exc: Exception) -> str:
     """
     Return a short user-safe explanation for the most common failures.
     """
+    if isinstance(exc, EmptyTranscriptionError):
+        return (
+            "Речь не обнаружена даже после автоматической повторной попытки. "
+            "Проверь, что в записи есть слышимый голос, и отправь её ещё раз."
+        )
+
     if isinstance(exc, TelegramBadRequest) and "file is too big" in str(exc).lower():
         return (
             "Telegram не передал такой большой файл. Нажми «📤 Загрузить большой файл» в /start."
@@ -4584,6 +4663,8 @@ async def audio_handler(message: Message, bot: Bot) -> None:
 
     local_path: Optional[Path] = None
     prepared_audio_path: Optional[Path] = None
+    status_message: Optional[Message] = None
+    started_at = time.monotonic()
 
     try:
         file_id, file_size, original_name = extract_file_id_and_size(message)
@@ -4611,7 +4692,6 @@ async def audio_handler(message: Message, bot: Bot) -> None:
             return
 
         await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-        started_at = time.monotonic()
         status_message = await message.answer(
             render_processing_status(
                 "Расшифровка медиа",
@@ -4757,12 +4837,17 @@ async def audio_handler(message: Message, bot: Bot) -> None:
     except Exception as exc:
         logging.exception("Failed to process audio message: %s", exc)
         reason = describe_processing_error(exc)
-        await message.answer(
-            "Не получилось распознать аудио.\n\n"
-            f"Причина: {reason}\n\n"
-            "Попробуй отправить другое голосовое, кружочек, аудио/видео или пришли мне лог Amvera "
-            "со строкой `Failed to process audio message`."
+        error_text = render_processing_status(
+            "Расшифровка не выполнена",
+            100,
+            "Речь не распознана",
+            reason,
+            int(time.monotonic() - started_at),
         )
+        if status_message is not None:
+            await safe_edit_message(status_message, error_text)
+        else:
+            await message.answer(error_text)
 
     finally:
         # Always delete local file after processing or failure.

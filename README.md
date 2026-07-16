@@ -401,6 +401,7 @@ alternatives:
 # Current high-accuracy configuration
 STT_PROVIDER=groq
 GROQ_WHISPER_MODEL=whisper-large-v3
+GROQ_WHISPER_FALLBACK_MODEL=whisper-large-v3-turbo
 STT_MAX_CONCURRENT_JOBS=1
 
 # Reserve 1: higher-quality OpenAI transcription
@@ -420,6 +421,8 @@ Configured reserve model IDs are also kept in `STT_BACKUP_MODELS` in
 implementation; no handler or pipeline changes are required. After moving to a
 paid high-throughput plan, `STT_MAX_CONCURRENT_JOBS` raises local concurrency
 without a code edit (keep it below the provider's own concurrency/rate limit).
+If Groq returns a valid but empty result, the bot automatically retries with
+language auto-detection and then `GROQ_WHISPER_FALLBACK_MODEL`.
 
 The free Groq quota is suitable for development, not thousands of active
 users. Production deployment should use a paid provider plan, persistent job
