@@ -2064,7 +2064,7 @@ async def start_upload_server(bot: Bot) -> web.AppRunner:
     if not is_public_https_url(get_public_upload_base_url()):
         logging.warning(
             "PUBLIC_UPLOAD_BASE_URL is not a public HTTPS URL; external devices "
-            "will receive a home-network label until a public tunnel/storage is configured."
+            "require a public tunnel or external file storage."
         )
     return runner
 
