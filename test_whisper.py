@@ -936,7 +936,11 @@ def build_upload_keyboard(upload_url: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Загрузить длинное аудио",
+                    text=(
+                        "📤 Загрузить длинное аудио"
+                        if is_public_https_url(upload_url)
+                        else "🏠 Загрузить в домашней сети"
+                    ),
                     url=upload_url,
                 )
             ]
@@ -1045,7 +1049,11 @@ def build_main_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     buttons.append(
         [
             InlineKeyboardButton(
-                text="📤 Загрузить большой файл",
+                text=(
+                    "📤 Загрузить большой файл"
+                    if is_public_https_url(get_public_upload_base_url())
+                    else "🏠 Большой файл · домашняя сеть"
+                ),
                 url=build_upload_url(upload_id),
             )
         ]
@@ -1096,12 +1104,22 @@ def create_upload_prompt(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """
     upload_id = create_upload_session(chat_id)
     upload_url = build_upload_url(upload_id)
-    text = (
-        "Файл больше 20 МБ, поэтому обычный Telegram Bot API не позволяет мне "
-        "скачать его автоматически.\n\n"
-        "Нажми кнопку ниже и выбери аудиофайл. После загрузки я сам пришлю "
-        "расшифровку сюда."
-    )
+    if is_public_https_url(upload_url):
+        text = (
+            "Файл больше 20 МБ, поэтому обычный Telegram Bot API не позволяет мне "
+            "скачать его автоматически.\n\n"
+            "Нажми кнопку ниже и выбери аудио или видео. Загрузка идёт частями, "
+            "повторяется после сетевых ошибок и может продолжиться после обрыва. "
+            "Готовую расшифровку я пришлю сюда."
+        )
+    else:
+        text = (
+            "⚠️ Внешняя загрузка больших файлов пока не подключена.\n\n"
+            "Кнопка ниже открывается только на устройствах в той же домашней сети, "
+            "что и бот. Через мобильный интернет адрес 192.168.x.x недоступен.\n\n"
+            "Временный вариант: отправь файл до 20 МБ прямо в Telegram. Для больших "
+            "файлов нужен публичный HTTPS-домен или облачное хранилище."
+        )
     return text, build_upload_keyboard(upload_url)
 
 

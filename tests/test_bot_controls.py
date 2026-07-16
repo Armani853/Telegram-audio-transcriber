@@ -52,12 +52,16 @@ class BotControlTests(unittest.IsolatedAsyncioTestCase):
                 "📥 Скачать видео с YouTube",
                 "📚 Медиатека",
                 "🌐 Русский",
-                "📤 Загрузить большой файл",
+                "🏠 Большой файл · домашняя сеть",
             ],
         )
         self.assertTrue(next(button for button in buttons if button.text == "📚 Медиатека").url)
         self.assertTrue(
-            next(button for button in buttons if button.text == "📤 Загрузить большой файл").url
+            next(
+                button
+                for button in buttons
+                if button.text == "🏠 Большой файл · домашняя сеть"
+            ).url
         )
 
         youtube_message = FakeMessage()
@@ -104,8 +108,9 @@ class BotControlTests(unittest.IsolatedAsyncioTestCase):
         long_message = FakeMessage(text="/long")
         await bot.long_upload_handler(long_message)
         long_button = long_message.answers[0]["kwargs"]["reply_markup"].inline_keyboard[0][0]
-        self.assertEqual(long_button.text, "Загрузить длинное аудио")
+        self.assertEqual(long_button.text, "🏠 Загрузить в домашней сети")
         self.assertIn("/upload/", long_button.url)
+        self.assertIn("Внешняя загрузка", long_message.answers[0]["text"])
 
         library_message = FakeMessage(text="/library")
         await bot.library_handler(library_message)
