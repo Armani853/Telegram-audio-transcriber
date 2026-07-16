@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import time
@@ -200,3 +201,55 @@ class YouTubeDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(prepared_service.download_finished)
         self.assertEqual(len(telegram.messages), 1)
         self.assertNotIn(42, bot_module.youtube_download_active_chats)
+
+    async def test_small_video_falls_back_to_telegram_document(self):
+        class Telegram:
+            def __init__(self):
+                self.video_attempts = 0
+                self.documents = []
+
+            async def send_video(self, **kwargs):
+                self.video_attempts += 1
+                raise RuntimeError("codec is not accepted as Telegram video")
+
+            async def send_document(self, **kwargs):
+                self.documents.append(kwargs)
+
+        telegram = Telegram()
+        delivered = await bot_module.send_small_youtube_file_through_telegram(
+            telegram,
+            42,
+            self.record,
+        )
+
+        self.assertTrue(delivered)
+        self.assertEqual(telegram.video_attempts, 1)
+        self.assertEqual(len(telegram.documents), 1)
+        self.assertEqual(telegram.documents[0]["chat_id"], 42)
+        self.assertIn("максимальной совместимости", telegram.documents[0]["caption"])
+
+    async def test_private_link_is_clearly_labeled_as_home_network_only(self):
+        self.service.config = replace(
+            self.service.config,
+            public_base_url="http://192.168.1.72:8080",
+        )
+
+        text = bot_module.render_youtube_download_ready_text(
+            self.service,
+            self.record,
+            preparation_seconds=1,
+            was_cached=True,
+        )
+        keyboard = bot_module.youtube_download_result_keyboard(self.service, self.record)
+
+        self.assertIn("только в домашней сети", text)
+        self.assertEqual(
+            keyboard.inline_keyboard[0][0].text,
+            "🏠 Скачать в домашней сети",
+        )
+
+    def test_public_https_detection_rejects_private_and_local_addresses(self):
+        self.assertFalse(bot_module.is_public_https_url("http://192.168.1.72:8080"))
+        self.assertFalse(bot_module.is_public_https_url("https://127.0.0.1:8080"))
+        self.assertFalse(bot_module.is_public_https_url("https://localhost:8080"))
+        self.assertTrue(bot_module.is_public_https_url("https://files.example.com"))

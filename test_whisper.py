@@ -3,6 +3,7 @@ import argparse
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
+import ipaddress
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -900,6 +901,24 @@ def get_public_upload_base_url() -> str:
         return PUBLIC_UPLOAD_BASE_URL.rstrip("/")
     host = "localhost" if UPLOAD_HOST in {"0.0.0.0", "::"} else UPLOAD_HOST
     return f"http://{host}:{UPLOAD_PORT}"
+
+
+def is_public_https_url(url: str) -> bool:
+    """Return whether a user-facing base URL is suitable outside the local network."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        return False
+    hostname = parsed.hostname.lower().rstrip(".")
+    if hostname == "localhost" or hostname.endswith((".local", ".localhost")):
+        return False
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return True
+    return address.is_global
 
 
 def build_upload_url(upload_id: str) -> str:
@@ -2031,6 +2050,11 @@ async def start_upload_server(bot: Bot) -> web.AppRunner:
     await site.start()
     logging.info("Upload server started on http://%s:%s", UPLOAD_HOST, UPLOAD_PORT)
     logging.info("Public upload base URL: %s", get_public_upload_base_url())
+    if not is_public_https_url(get_public_upload_base_url()):
+        logging.warning(
+            "PUBLIC_UPLOAD_BASE_URL is not a public HTTPS URL; external devices "
+            "will receive a home-network label until a public tunnel/storage is configured."
+        )
     return runner
 
 
@@ -4193,11 +4217,16 @@ def youtube_download_result_keyboard(
     service: YouTubeDownloadService,
     record: YouTubeDownloadRecord,
 ) -> InlineKeyboardMarkup:
+    public_link = is_public_https_url(service.config.public_base_url)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="⬇️ Скачать готовый файл",
+                    text=(
+                        "⬇️ Скачать готовый файл"
+                        if public_link
+                        else "🏠 Скачать в домашней сети"
+                    ),
                     url=service.landing_url(record),
                 )
             ]
@@ -4210,10 +4239,21 @@ def render_youtube_download_ready_text(
     record: YouTubeDownloadRecord,
     preparation_seconds: float,
     was_cached: bool,
+    direct_delivery: bool = False,
 ) -> str:
     quality_text = "MP3" if record.quality == QUALITY_AUDIO else f"{record.height}p MP4"
     cache_text = "Файл уже был в кэше." if was_cached else "Файл скачан и проверен."
     ttl_hours = max(1, (service.config.ttl_seconds + 3599) // 3600)
+    public_link = is_public_https_url(service.config.public_base_url)
+    if direct_delivery:
+        delivery_text = "📲 Файл отправлен прямо в Telegram и доступен на любом устройстве.\n\n"
+    elif public_link:
+        delivery_text = "🌐 Ссылка доступна через интернет с телефона, планшета и компьютера.\n\n"
+    else:
+        delivery_text = (
+            "⚠️ Внешнее файловое хранилище пока не подключено. Ссылка ниже работает "
+            "только в домашней сети; через мобильный интернет она не откроется.\n\n"
+        )
     return (
         "✅ <b>Видео готово</b>\n\n"
         f"🎬 {escape(record.title)}\n"
@@ -4221,9 +4261,58 @@ def render_youtube_download_ready_text(
         f"📦 Размер: {format_file_size(record.file_size)}\n"
         f"⏱ Подготовка: {preparation_seconds:.1f} сек.\n"
         f"⚡ {cache_text}\n\n"
+        f"{delivery_text}"
         f"Файл хранится {ttl_hours} ч. Каждое открытие или продолжение скачивания "
         "продлевает этот срок."
     )
+
+
+async def send_small_youtube_file_through_telegram(
+    bot: Bot,
+    chat_id: int,
+    record: YouTubeDownloadRecord,
+) -> bool:
+    """Deliver small files globally; fall back from Telegram video to document."""
+    quality_text = "MP3" if record.quality == QUALITY_AUDIO else f"{record.height}p MP4"
+    caption = f"✅ Готово · {quality_text} · {format_file_size(record.file_size)}"
+    if record.quality == QUALITY_AUDIO:
+        try:
+            await bot.send_document(
+                chat_id=chat_id,
+                document=FSInputFile(str(record.file_path), filename=record.file_name),
+                caption=caption,
+            )
+            return True
+        except Exception as exc:
+            logging.warning("Could not send small YouTube audio through Telegram: %s", exc)
+            return False
+
+    try:
+        await bot.send_video(
+            chat_id=chat_id,
+            video=FSInputFile(str(record.file_path), filename=record.file_name),
+            caption=caption,
+            supports_streaming=True,
+        )
+        return True
+    except Exception as video_error:
+        logging.warning(
+            "Telegram rejected small YouTube video; retrying as document: %s",
+            video_error,
+        )
+    try:
+        await bot.send_document(
+            chat_id=chat_id,
+            document=FSInputFile(str(record.file_path), filename=record.file_name),
+            caption=f"{caption}\nОтправлено как файл для максимальной совместимости.",
+        )
+        return True
+    except Exception as document_error:
+        logging.warning(
+            "Could not send small YouTube video as Telegram document: %s",
+            document_error,
+        )
+        return False
 
 
 async def deliver_one_youtube_notification(
@@ -4309,12 +4398,19 @@ async def process_youtube_download_selection(
             quality,
         )
         elapsed_seconds = int(time.monotonic() - started_at)
-        quality_text = "MP3" if quality == QUALITY_AUDIO else f"{record.height}p MP4"
+        direct_delivery = False
+        if record.file_size <= youtube_download_service.config.telegram_direct_limit_bytes:
+            direct_delivery = await send_small_youtube_file_through_telegram(
+                bot,
+                chat_id,
+                record,
+            )
         ready_text = render_youtube_download_ready_text(
             youtube_download_service,
             record,
             preparation_seconds,
             was_cached,
+            direct_delivery=direct_delivery,
         )
         notification = await youtube_download_service.queue_notification(
             chat_id,
@@ -4338,27 +4434,6 @@ async def process_youtube_download_selection(
                 notification,
             )
 
-        if record.file_size <= youtube_download_service.config.telegram_direct_limit_bytes:
-            try:
-                media = FSInputFile(str(record.file_path), filename=record.file_name)
-                caption = (
-                    f"✅ Готово · {quality_text} · {format_file_size(record.file_size)}\n"
-                    "Ссылка выше останется запасным способом скачивания."
-                )
-                if quality == QUALITY_AUDIO:
-                    await bot.send_document(chat_id=chat_id, document=media, caption=caption)
-                else:
-                    await bot.send_video(
-                        chat_id=chat_id,
-                        video=media,
-                        caption=caption,
-                        supports_streaming=True,
-                    )
-            except Exception as telegram_error:
-                logging.warning(
-                    "Could not additionally send small YouTube file through Telegram: %s",
-                    telegram_error,
-                )
         logging.info(
             "YouTube download ready chat_id=%s video_id=%s quality=%s size=%s cached=%s elapsed=%s",
             chat_id,

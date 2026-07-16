@@ -371,6 +371,26 @@ the same local network. Phones on cellular data and users outside that network
 require a public HTTPS `PUBLIC_UPLOAD_BASE_URL`; client-side code cannot make a
 private LAN address globally reachable.
 
+Small YouTube results under `YOUTUBE_TELEGRAM_DIRECT_LIMIT_BYTES` are sent
+directly through Telegram and therefore work globally without the HTTP file
+server. The bot first attempts a streamable Telegram video and automatically
+retries as a document when Telegram does not accept the video's codec. Private
+download URLs are explicitly labelled `🏠 Скачать в домашней сети` and the
+message explains that cellular users cannot open them.
+
+For large files, configure a stable public hostname. With a Cloudflare named
+tunnel, publish `https://files.example.com` to `http://127.0.0.1:8080`, keep
+`cloudflared` running as a service, and set:
+
+```env
+PUBLIC_UPLOAD_BASE_URL=https://files.example.com
+```
+
+An account-less `trycloudflare.com` Quick Tunnel is suitable only for a short
+test: its hostname changes after restart, it has no uptime guarantee, and it
+must not be used as the production download address. S3/R2 plus a CDN is the
+preferred architecture when large files will be downloaded by many users.
+
 ## Speech-to-text provider switch
 
 The active provider is selected with one environment variable. Groq remains
