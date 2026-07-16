@@ -610,24 +610,41 @@ def download_landing_page(record: YouTubeDownloadRecord, file_url: str) -> web.R
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Скачать {escape(record.title)}</title>
 <style>
+*{{box-sizing:border-box}}
 body{{margin:0;background:#f4f7fb;color:#172033;font-family:Inter,Arial,sans-serif}}
 .wrap{{max-width:720px;margin:0 auto;padding:32px 18px}}
 .card{{background:#fff;border-radius:24px;padding:28px;box-shadow:0 16px 50px rgba(31,52,89,.12)}}
 .ok{{display:inline-block;background:#e6f8ed;color:#168447;padding:8px 12px;border-radius:999px;font-weight:700}}
-h1{{font-size:25px;line-height:1.25;margin:18px 0 10px}} .meta{{color:#667085;line-height:1.8}}
-.button{{display:block;margin-top:24px;padding:16px 20px;border-radius:15px;background:#2481cc;color:#fff;text-align:center;text-decoration:none;font-size:18px;font-weight:800}}
+h1{{font-size:25px;line-height:1.25;margin:18px 0 10px;overflow-wrap:anywhere}} .meta{{color:#667085;line-height:1.8}}
+.button{{display:flex;align-items:center;justify-content:center;min-height:52px;margin-top:24px;padding:14px 20px;border-radius:15px;background:#2481cc;color:#fff;text-align:center;text-decoration:none;font-size:18px;font-weight:800;touch-action:manipulation;-webkit-tap-highlight-color:transparent}}
 .note{{margin-top:18px;color:#7a8496;font-size:14px;line-height:1.5}}
+@media(max-width:480px){{.wrap{{padding:16px 12px}}.card{{padding:20px 16px;border-radius:18px}}h1{{font-size:21px}}.button{{font-size:17px}}}}
 </style></head><body><main class="wrap"><section class="card">
 <span class="ok">✓ Файл готов</span><h1>{escape(record.title)}</h1>
 <div class="meta">Качество: <b>{escape(quality)}</b><br>Размер: <b>{escape(format_file_size(record.file_size))}</b><br>Длительность: <b>{escape(format_duration(record.duration))}</b></div>
 <a class="button" href="{escape(file_url)}">⬇️ Скачать готовый файл</a>
 <div class="note">Ссылка действует ещё примерно {hours} ч {minutes} мин. После этого файл будет автоматически удалён.</div>
 </section></main></body></html>"""
-    return web.Response(text=body, content_type="text/html")
+    return web.Response(
+        text=body,
+        content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; frame-ancestors 'none'",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+YOUTUBE_DOWNLOAD_SERVICE_APP_KEY = web.AppKey(
+    "youtube_download_service",
+    YouTubeDownloadService,
+)
 
 
 def register_youtube_download_routes(app: web.Application, service: YouTubeDownloadService) -> None:
-    app["youtube_download_service"] = service
+    app[YOUTUBE_DOWNLOAD_SERVICE_APP_KEY] = service
 
     async def landing(request: web.Request) -> web.Response:
         record = await service.get_by_token(request.match_info["token"])
@@ -640,11 +657,17 @@ def register_youtube_download_routes(app: web.Application, service: YouTubeDownl
         if record is None:
             raise web.HTTPGone(text="Ссылка истекла или файл уже удалён.")
         encoded_name = quote(record.file_name)
+        ascii_extension = ".mp3" if record.quality == QUALITY_AUDIO else ".mp4"
+        ascii_name = f"youtube_{record.video_id}_{record.quality}{ascii_extension}"
         return web.FileResponse(
             record.file_path,
             headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}",
+                "Content-Disposition": (
+                    f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+                ),
                 "Cache-Control": "private, max-age=3600",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
             },
         )
 

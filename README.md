@@ -332,6 +332,19 @@ For production, `PUBLIC_UPLOAD_BASE_URL` must be a public HTTPS address pointing
 to the embedded HTTP service. Download only media that the user owns or is
 authorized to save.
 
+The web UI is responsive for laptop, Android phone, iPhone, and iPad widths.
+Download responses provide both an ASCII fallback filename and an RFC 5987
+UTF-8 filename, the correct media MIME type, byte ranges for pause/resume, and
+mobile-safe security headers. Uploads are chunked and resumable after a dropped
+connection. Automated cross-device tests exercise desktop Chrome, Android
+Chrome, iPhone Safari, and iPad Safari user-agent profiles, including parallel
+first/middle/last byte ranges and interrupted upload recovery.
+
+A private address such as `http://192.168.x.x` works only while the device is on
+the same local network. Phones on cellular data and users outside that network
+require a public HTTPS `PUBLIC_UPLOAD_BASE_URL`; client-side code cannot make a
+private LAN address globally reachable.
+
 ## Speech-to-text provider switch
 
 The active provider is selected with one environment variable. Groq remains
