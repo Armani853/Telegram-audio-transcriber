@@ -29,6 +29,8 @@ them into safe chunks with `ffmpeg`.
    # UPLOAD_HOST=0.0.0.0
    # UPLOAD_PORT=8080
    # UPLOAD_CHUNK_BYTES=8388608
+   # Optional. Use only if YouTube asks the hosting IP to confirm it is not a bot.
+   # YTDLP_COOKIES_FILE=/path/to/youtube-cookies.txt
    ```
 
 3. Install `ffmpeg` if you want to transcribe long audio files:
@@ -133,6 +135,78 @@ The standard cloud Telegram Bot API still cannot download Telegram files larger
 than 20 MB. The upload button is the practical workaround when you do not have
 Telegram `api_id` and `api_hash`.
 
+## Media library
+
+The bot also includes a local media-library mode for lectures, voice files,
+videos, podcasts, and meeting recordings.
+
+In Telegram:
+
+```text
+/library
+```
+
+This opens `/app`, where you can upload `.ogg`, `.opus`, `.mp3`, `.m4a`, `.wav`,
+`.webm`, `.mp4`, `.mov`, or `.mkv`. The media-library upload also uses chunked
+resumable upload. After a file is accepted, a background worker stores the
+original file, extracts and normalizes audio with `ffmpeg`, transcribes it with
+Groq Whisper, creates `.txt`, `.srt`, and `.vtt` outputs, indexes the transcript,
+and generates chapters, summary, and action items.
+
+Search from Telegram:
+
+```text
+/search нормализация базы данных
+```
+
+Search results include the media title, an approximate timestamp, a transcript
+snippet, and a link that opens the media page at that timestamp.
+
+Local media-library settings:
+
+```env
+# Optional
+# On Windows defaults to %LOCALAPPDATA%\VoiceAssistant
+MEDIA_DATA_DIR=C:\Users\you\AppData\Local\VoiceAssistant
+MEDIA_DB_PATH=media_library.sqlite3
+MEDIA_STORAGE_DIR=storage
+MEDIA_MAX_ACTIVE_JOBS=2
+MEDIA_UPLOAD_SESSION_TTL_SECONDS=86400
+MEDIA_MAX_DURATION_SECONDS=10800
+ENABLE_GROQ_LLM_POSTPROCESSING=1
+GROQ_LLM_MODEL=llama-3.1-8b-instant
+```
+
+The first implementation is intentionally local-first: SQLite + filesystem
+object storage + an in-process worker. The database and `storage/` directory are
+ignored by git. This keeps the current simple local bot workflow intact while
+leaving a clear path to Redis/PostgreSQL/MinIO later.
+
+Media-library features included in the local version:
+
+- persistent SQLite tables for users, media items, files, jobs, chunks, search,
+  chapters, summaries, tasks, and upload sessions;
+- local object storage for original media, extracted audio, TXT, SRT, VTT, and
+  metadata JSON;
+- chunked resumable upload with TTL cleanup;
+- background in-process worker with job statuses and SSE progress;
+- Telegram progress message editing for media-library uploads;
+- video audio extraction and loudness normalization through `ffmpeg`;
+- SHA-256 deduplication with derived transcript/search data reuse;
+- Groq Whisper transcription plus optional Groq LLM chapters, summary, key
+  points, and action items;
+- web player with clickable transcript/chapter timestamps;
+- Telegram `/search` and web search over transcript chunks;
+- task export as `tasks.txt`.
+
+Production upgrade path:
+
+- replace SQLite with PostgreSQL for concurrent multi-user hosting;
+- replace local filesystem storage with MinIO/S3;
+- replace the in-process queue with Redis + RQ/Celery workers;
+- keep the same media/job/object-storage boundaries already present in the
+  local implementation.
+
 ### Optional: local Telegram Bot API
 
 The standard cloud Telegram Bot API cannot download files larger than 20 MB.
@@ -177,3 +251,120 @@ python test_whisper.py --transcribe voice.ogg
 ```
 
 This command sends the selected audio file to Groq.
+
+## YouTube links
+
+Send a regular `youtube.com` or `youtu.be` video link to the bot. Videos up to
+12 hours are accepted by default. The bot first uses the video's original manual
+or automatic captions; if none exist, it downloads the audio and asks the
+configured speech-to-text provider for segment timestamps.
+
+YouTube results are always sent as a UTF-8 `.txt` document, including for short
+videos. The first section is a timestamped table of contents; the second is the
+complete transcript. Native YouTube chapters are preferred, timestamp rows in
+the description are the next fallback, and videos without either receive an
+automatic transcript-derived outline covering the full duration. Tiny caption
+fragments are grouped into readable phrases. Every row keeps the timestamp on
+the left and the text on the right:
+
+```text
+СОДЕРЖАНИЕ ВИДЕО
+
+0:03     │ Introduction
+2:15     │ Main topic
+
+РАСШИФРОВКА ВИДЕО
+
+0:03     │ first caption line
+0:07     │ next caption line
+```
+
+Current YouTube extraction needs yt-dlp's EJS component and a JavaScript
+runtime. Both are installed by `requirements.txt` (`yt-dlp[default]` plus
+Deno). If YouTube challenges a hosting IP even with those installed, export
+Netscape-format cookies and set `YTDLP_COOKIES_FILE` to their server path.
+When `YTDLP_PROXY_URL` is not set, the bot reuses `TELEGRAM_PROXY_URL` for
+YouTube; this avoids a blocked direct IP while preserving a separate override.
+
+Optional settings:
+
+```env
+YOUTUBE_MAX_DURATION_SECONDS=43200
+YOUTUBE_DOWNLOAD_TIMEOUT_SECONDS=7200
+YTDLP_JS_RUNTIME=deno
+YTDLP_PROXY_URL=http://proxy-host:proxy-port
+YTDLP_COOKIES_FILE=/path/to/youtube-cookies.txt
+YTDLP_EXTRACTOR_ARGS=youtube:player_client=default,-android_sdkless
+```
+
+The bot retries transient extractor and media-fragment failures. It also
+distinguishes temporary HTTP failures from videos that YouTube itself marks as
+private, region-restricted, or copyright-blocked. A blocked video cannot be
+transcribed because YouTube exposes neither its media nor its captions.
+
+## YouTube downloads
+
+The main keyboard has a separate `📥 Скачать видео с YouTube` flow. After the
+next URL, the bot reads the real YouTube formats and offers only exact available
+360p, 720p, 1080p, and audio options. Video is downloaded as MP4 with the exact
+selected height; audio is normalized to MP3. The completed media is verified
+with ffprobe before a user receives a download link.
+
+Files smaller than the configured Telegram threshold are additionally sent in
+chat. Larger files use an unguessable HTTP download URL, avoiding the cloud Bot
+API's upload limit. The landing page displays title, exact quality, size,
+duration, and expiry. Results are cached by YouTube video ID and quality, so a
+repeat request is returned immediately. Expired files and database records are
+deleted automatically.
+
+```env
+YOUTUBE_DOWNLOAD_TTL_SECONDS=86400
+YOUTUBE_DOWNLOAD_REQUEST_TTL_SECONDS=1800
+YOUTUBE_DOWNLOAD_TIMEOUT_SECONDS=21600
+YOUTUBE_DOWNLOAD_CONCURRENT_FRAGMENTS=8
+YOUTUBE_DOWNLOAD_MAX_CONCURRENT=2
+YOUTUBE_TELEGRAM_DIRECT_LIMIT_BYTES=51380224
+# YOUTUBE_DOWNLOAD_STORAGE_DIR=/persistent/youtube_downloads
+# YOUTUBE_DOWNLOAD_DB_PATH=/persistent/youtube_downloads.sqlite3
+```
+
+For production, `PUBLIC_UPLOAD_BASE_URL` must be a public HTTPS address pointing
+to the embedded HTTP service. Download only media that the user owns or is
+authorized to save.
+
+## Speech-to-text provider switch
+
+The active provider is selected with one environment variable. Groq remains
+the default, while OpenAI and Deepgram adapters are ready as production
+alternatives:
+
+```env
+# Current high-accuracy configuration
+STT_PROVIDER=groq
+GROQ_WHISPER_MODEL=whisper-large-v3
+STT_MAX_CONCURRENT_JOBS=1
+
+# Reserve 1: higher-quality OpenAI transcription
+# STT_PROVIDER=openai
+# OPENAI_API_KEY=...
+# OPENAI_STT_MODEL=gpt-4o-transcribe
+# OPENAI_STT_TIMESTAMP_MODEL=gpt-4o-transcribe-diarize
+
+# Reserve 2: high-throughput pre-recorded transcription
+# STT_PROVIDER=deepgram
+# DEEPGRAM_API_KEY=...
+# DEEPGRAM_STT_MODEL=nova-3
+```
+
+Configured reserve model IDs are also kept in `STT_BACKUP_MODELS` in
+`test_whisper.py`. Changing `STT_PROVIDER` and restarting the bot switches the
+implementation; no handler or pipeline changes are required. After moving to a
+paid high-throughput plan, `STT_MAX_CONCURRENT_JOBS` raises local concurrency
+without a code edit (keep it below the provider's own concurrency/rate limit).
+
+The free Groq quota is suitable for development, not thousands of active
+users. Production deployment should use a paid provider plan, persistent job
+queue, multiple workers, usage monitoring, retry/backoff, and alerts before
+quota exhaustion. The in-process semaphore intentionally handles only one
+transcription at a time and must be replaced or distributed before a public
+high-volume launch.
